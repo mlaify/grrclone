@@ -17,6 +17,7 @@ func usage() -> Never {
       grrclonectl reconcile                   clean up orphans from an unclean shutdown
       grrclonectl recovery-test <remote>      connect, kill the server, verify self-repair
       grrclonectl drain-test <remote>         write a large file, verify uploads are tracked
+      grrclonectl quit-safety-test <remote>   kill the daemon mid-upload, verify we warn
       grrclonectl doctor                      check the environment
 
     Mounts land in ~/grrclone/<name>. Nothing outside grrclone's own records is ever
@@ -216,6 +217,67 @@ do {
         print(stranded == 0 && immediately.pendingUploads > 0
               ? "RESULT: pending uploads are tracked and drained correctly"
               : "RESULT: CHECK — pending=\(immediately.pendingUploads) stranded=\(stranded)")
+
+    case "quit-safety-test":
+        // The adversarial case. A daemon that dies holding queued uploads answers
+        // nothing, and the danger is that silence reads as "all clear" — reassurance
+        // at the moment it is least warranted. This asserts we report unknown instead.
+        guard arguments.count >= 2 else { usage() }
+        let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
+        let (manager, supervisor) = try makeManager()
+        let connection = Connection(remote: remote, displayName: "quit-safety-test")
+        var failures: [String] = []
+
+        print("1. connecting…")
+        let mount = try await manager.connect(connection)
+
+        print("2. baseline: an idle mount must be known-idle…")
+        let idle = await manager.activity()
+        print("   isKnownIdle=\(idle.isKnownIdle) pending=\(idle.pendingUploads) unknown=\(idle.hasUnknownState)")
+        if !idle.isKnownIdle { failures.append("a freshly connected idle mount was not known-idle") }
+
+        print("3. queueing a large upload…")
+        let payload = Data(repeating: 0x71, count: 96 * 1024 * 1024)
+        let target = mount.mountPoint.appendingPathComponent(".grrclone-quit-probe")
+        try payload.write(to: target)
+        let queued = await manager.activity()
+        print("   pending=\(queued.pendingUploads) isKnownIdle=\(queued.isKnownIdle)")
+        if queued.pendingUploads == 0 { failures.append("a 96 MB write registered no pending upload") }
+        if queued.isKnownIdle { failures.append("pending uploads were reported as idle") }
+
+        print("4. killing the daemon while that upload is still queued…")
+        let pidFile = DaemonPidFile(
+            url: DaemonPidFile.defaultURL(runtimeDirectory: DaemonSupervisor.defaultRuntimeDirectory()))
+        guard let record = pidFile.read() else { print("   FAIL: no daemon pid"); exit(1) }
+        kill(record.pid, SIGKILL)
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+
+        print("5. THE TEST: what do we tell the user now?")
+        let dead = await manager.activity()
+        print("   pending=\(dead.pendingUploads) unknown=\(dead.hasUnknownState) isKnownIdle=\(dead.isKnownIdle)")
+        if dead.isKnownIdle {
+            failures.append("a dead daemon holding a queued upload was reported as safe to quit")
+        }
+        if !dead.hasUnknownState {
+            failures.append("a dead daemon was not reported as unknown state")
+        }
+
+        print("6. draining must not claim success against a dead daemon…")
+        let stranded = await manager.drainUploads(timeout: 8)
+        print("   drainUploads reported \(stranded) outstanding")
+        if stranded == 0 { failures.append("drain reported everything finished against a dead daemon") }
+
+        print("7. cleaning up…")
+        _ = await manager.shutdown(drainTimeout: 0)
+        await supervisor.stop()
+
+        if failures.isEmpty {
+            print("RESULT: quit safety holds — silence is reported as unknown, not as safe")
+        } else {
+            print("RESULT: FAILED")
+            for f in failures { print("  - \(f)") }
+            exit(1)
+        }
 
     default:
         usage()

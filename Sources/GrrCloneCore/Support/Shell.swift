@@ -31,6 +31,11 @@ public enum Shell {
         }
     }
 
+    /// Extra time allowed for draining stdout and stderr after the process itself has
+    /// hit its timeout. A call that times out therefore returns after roughly
+    /// `timeout + pipeDrainSlack`, which callers budgeting a deadline must account for.
+    public static let pipeDrainSlack: TimeInterval = 5
+
     @discardableResult
     public static func run(_ executable: String, _ arguments: [String],
                            timeout: TimeInterval = 30) async throws -> Result {
@@ -50,10 +55,10 @@ public enum Shell {
         // waiting, neither moves.
         let outHandle = outPipe.fileHandleForReading
         let errHandle = errPipe.fileHandleForReading
-        async let outData = Deadline.run(seconds: timeout + 5) {
+        async let outData = Deadline.run(seconds: timeout + pipeDrainSlack) {
             (try? outHandle.readToEnd()) ?? Data()
         }
-        async let errData = Deadline.run(seconds: timeout + 5) {
+        async let errData = Deadline.run(seconds: timeout + pipeDrainSlack) {
             (try? errHandle.readToEnd()) ?? Data()
         }
 

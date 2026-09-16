@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     @Published var lastError: String?
     @Published private(set) var activity = ConnectionManager.Activity()
 
+    private var activityPoller: Task<Void, Never>?
     private let systemEvents = SystemEvents()
     private let store = ConnectionStore()
     private let registry = MountRegistry(fileURL: MountRegistry.defaultURL())
@@ -174,12 +175,21 @@ final class AppModel: ObservableObject {
     /// - Parameter drainTimeout: seconds to wait for uploads before unmounting. Zero
     ///   skips the wait, for a user who was told what was pending and chose to quit.
     @discardableResult
-    func shutdown(drainTimeout: TimeInterval = 0) async -> Int {
+    func shutdown(drainTimeout: TimeInterval = 0) async -> ConnectionManager.ShutdownOutcome {
         status = "Disconnecting"
-        let stranded = await manager?.shutdown(drainTimeout: drainTimeout) { pending in
+        activityPoller?.cancel()
+        activityPoller = nil
+        guard let manager else { return .init() }
+        return await manager.shutdown(drainTimeout: drainTimeout) { pending in
             Task { @MainActor in self.status = "Finishing uploads (\(pending) left)" }
         }
-        return stranded ?? 0
+    }
+
+    /// Worst case for a full teardown, so the caller can size its watchdog from the
+    /// real budget rather than a guess.
+    func teardownBudget(drainTimeout: TimeInterval) async -> TimeInterval {
+        guard let manager else { return 5 }
+        return await manager.teardownBudget(drainTimeout: drainTimeout)
     }
 
     /// Sleep and network changes break mounts without reporting an error anywhere: the
@@ -212,31 +222,39 @@ final class AppModel: ObservableObject {
     /// Poll local cache state so pending uploads are visible, and so quitting can warn
     /// about them. Two seconds is frequent enough to feel live without being noisy.
     private func startPollingActivity() {
-        Task { [weak self] in
+        activityPoller?.cancel()
+        // The handle is retained so shutdown can stop it. Without that, the loop keeps
+        // running after the daemon is gone and overwrites the published activity with
+        // the empty snapshot an unreachable daemon returns — clearing the menu's
+        // pending-upload notice at the exact moment it matters most.
+        activityPoller = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self else { return }
-                let manager = await MainActor.run { self.manager }
-                guard let manager else { return }
+                guard let self, let manager = await self.currentManager else { return }
                 let snapshot = await manager.activity()
+                if Task.isCancelled { return }
                 await MainActor.run { self.activity = snapshot }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
     }
 
-    /// Uploads not yet stored at the provider. Non-zero means quitting now would strand
-    /// the only copy of a file in a local cache the user does not know about.
+    private var currentManager: ConnectionManager? { manager }
+
+    /// Last polled count, for display only. Up to two seconds stale, so it must never
+    /// be the basis of a safety decision — use `currentActivity()` for that.
     var pendingUploads: Int { activity.pendingUploads }
 
-    /// Wait for uploads to finish, reporting progress. Returns what is still outstanding.
-    func drainUploads(timeout: TimeInterval) async -> Int {
-        guard let manager else { return 0 }
-        status = "Finishing uploads"
-        let remaining = await manager.drainUploads(timeout: timeout) { pending in
-            Task { @MainActor in self.status = "Finishing uploads (\(pending) left)" }
-        }
-        status = remaining == 0 ? "Ready" : "\(remaining) upload(s) unfinished"
-        return remaining
+    /// Ask rclone right now rather than trusting the poll.
+    ///
+    /// The quit path needs this: a file copied in Finder and followed immediately by
+    /// Cmd-Q lands inside the two-second polling gap, so the cached count still reads
+    /// zero and the drain would be skipped entirely — the precise case this feature
+    /// exists to catch.
+    func currentActivity() async -> ConnectionManager.Activity {
+        guard let manager else { return ConnectionManager.Activity() }
+        let snapshot = await manager.activity()
+        activity = snapshot
+        return snapshot
     }
 
     /// Probe now, on demand, from the menu.

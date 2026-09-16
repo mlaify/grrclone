@@ -72,7 +72,8 @@ struct MenuBarView: View {
     /// Kept as a computed property rather than inlined into the `if`. A multi-line
     /// boolean expression inside a ViewBuilder gets misparsed as a trailing closure.
     private var hasActivityToReport: Bool {
-        model.pendingUploads > 0 || model.activity.erroredFiles > 0 || model.activity.outOfSpace
+        model.pendingUploads > 0 || model.activity.erroredFiles > 0
+            || model.activity.outOfSpace || model.activity.hasUnknownState
     }
 
     /// Pending uploads are shown prominently because a write returns as soon as it hits
@@ -91,6 +92,12 @@ struct MenuBarView: View {
                 Text("Saved on this Mac, not yet on the server.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+            if model.activity.hasUnknownState {
+                Label("Cannot reach rclone — upload state unknown",
+                      systemImage: "questionmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             if model.activity.erroredFiles > 0 {
                 Label("\(model.activity.erroredFiles) upload(s) failing, will retry",

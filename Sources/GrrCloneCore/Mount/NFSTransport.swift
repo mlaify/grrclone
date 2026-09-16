@@ -107,14 +107,26 @@ public struct NFSTransport: MountTransport {
         }
     }
 
+    /// Seconds one unmount can take in the worst case: both attempts timing out, plus
+    /// the slack `Shell.run` allows for draining pipes after it kills a process.
+    ///
+    /// Exposed so callers can budget a teardown instead of guessing. Guessing is what
+    /// let the app's quit backstop fire mid-unmount.
+    public static let unmountBudget: TimeInterval =
+        attemptTimeout * 2 + Shell.pipeDrainSlack * 2
+
+    static let attemptTimeout: TimeInterval = 60
+
     public func unmount(at mountPoint: URL) async throws {
         // diskutil goes through DiskArbitration, which can dislodge a mount that plain
         // umount cannot. Note `umount -l` is Linux-only and unavailable here.
         let forced = try? await Shell.run(
-            "/usr/sbin/diskutil", ["umount", "force", mountPoint.path], timeout: 60)
+            "/usr/sbin/diskutil", ["umount", "force", mountPoint.path],
+            timeout: Self.attemptTimeout)
         if forced?.succeeded == true { return }
 
-        let fallback = try await Shell.run("/sbin/umount", ["-f", mountPoint.path], timeout: 60)
+        let fallback = try await Shell.run("/sbin/umount", ["-f", mountPoint.path],
+                                           timeout: Self.attemptTimeout)
         guard fallback.succeeded else {
             let detail = fallback.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw MountError.unmountFailed(detail.isEmpty ? "exit \(fallback.status)" : detail)

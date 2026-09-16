@@ -35,6 +35,11 @@ struct GrrCloneApp: App {
 /// opened the menu. Both were observed before this moved here.
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    /// `reply(toApplicationShouldTerminate:)` must be sent exactly once. Two callers can
+    /// race for it — the teardown and the watchdog — and the second call would arrive
+    /// after termination is already under way.
+    private var terminationAnswered = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
             await AppModel.shared.start()
@@ -42,75 +47,125 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Quit is deferred, for two separate reasons that both end in lost work.
+    /// Quit always defers, then decides asynchronously.
     ///
-    /// Uploads first: with `--vfs-cache-mode full` a write returns as soon as the bytes
-    /// reach local disk, so Finder can show a file as saved while nothing has reached the
-    /// storage provider. Quitting then strands the only copy in a cache the user does not
-    /// know exists. If anything is pending, they are asked rather than surprised.
+    /// It has to. Deciding here and now would mean reading the polled upload count,
+    /// which lags by up to two seconds — long enough for a file copied in Finder and
+    /// followed straight by Cmd-Q to look like nothing at all, skipping the drain
+    /// entirely. rclone is asked directly instead, which a synchronous delegate
+    /// callback cannot do.
     ///
-    /// Mounts second: killing rclone under a live NFS mount leaves the kernel talking to
-    /// a dead server, which hangs Finder until the mount is forcibly removed.
+    /// Cancelling is therefore expressed by replying `false` rather than returning
+    /// `.terminateCancel`, because the answer is not known when this returns.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let pending = AppModel.shared.pendingUploads
-
-        if pending > 0, case .cancel = askAboutPendingUploads(count: pending) {
-            return .terminateCancel
-        }
-        // Waiting is capped: a provider that has gone away must not make the app
-        // unquittable. Past the cap the files stay in the cache and are retried on the
-        // next launch.
-        let drainTimeout: TimeInterval = pending > 0 ? 120 : 0
-
         Task { @MainActor in
-            let stranded = await AppModel.shared.shutdown(drainTimeout: drainTimeout)
-            if stranded > 0 { Self.warnAboutStrandedUploads(count: stranded) }
-            NSApp.reply(toApplicationShouldTerminate: true)
-        }
+            let model = AppModel.shared
+            let snapshot = await model.currentActivity()
 
-        // Absolute backstop. A mount that refuses to come down must not trap the user in
-        // an app that will not quit. Comfortably longer than the drain cap.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 150) {
-            NSApp.reply(toApplicationShouldTerminate: true)
+            if !snapshot.isKnownIdle,
+               case .cancel = Self.askAboutPendingUploads(snapshot) {
+                self.answerTermination(false)
+                return
+            }
+
+            let drainTimeout: TimeInterval = snapshot.isKnownIdle ? 0 : 120
+
+            // Sized from the real budget rather than a guess. The previous fixed 150s
+            // was shorter than a worst-case teardown, so it could fire between
+            // unmounting a volume and stopping the daemon — the one state the ordering
+            // exists to avoid. `shutdown` also enforces this deadline internally, so
+            // this is a backstop for the backstop.
+            let budget = await model.teardownBudget(drainTimeout: drainTimeout)
+            self.armWatchdog(after: budget + 30)
+
+            let outcome = await model.shutdown(drainTimeout: drainTimeout)
+            if !outcome.isClean { Self.reportUncleanShutdown(outcome) }
+            self.answerTermination(true)
         }
 
         return .terminateLater
     }
 
+    private func armWatchdog(after seconds: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            self?.answerTermination(true)
+        }
+    }
+
+    private func answerTermination(_ shouldTerminate: Bool) {
+        guard !terminationAnswered else { return }
+        terminationAnswered = true
+        NSApp.reply(toApplicationShouldTerminate: shouldTerminate)
+    }
+
     private enum PendingChoice { case waitAndQuit, cancel }
 
-    private func askAboutPendingUploads(count: Int) -> PendingChoice {
+    @MainActor
+    private static func askAboutPendingUploads(
+        _ activity: ConnectionManager.Activity
+    ) -> PendingChoice {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = count == 1
-            ? "One file has not finished uploading"
-            : "\(count) files have not finished uploading"
-        alert.informativeText = """
-            These files are saved on this Mac but have not reached your storage provider \
-            yet. grrclone can wait for them to finish before quitting.
 
-            If you quit now, they stay in the local cache and are retried the next time \
-            you connect. They will not be lost, but they will not be on the server either.
-            """
+        if activity.hasUnknownState {
+            // An unreachable daemon is reported honestly rather than as "all clear".
+            // Reading silence as zero is what makes a safety check fail open, and it
+            // would fail open in precisely the situation that strands files.
+            alert.messageText = "grrclone cannot confirm your uploads finished"
+            alert.informativeText = """
+                The rclone process is not responding, so there is no way to tell whether \
+                recent changes reached your storage provider.
+
+                Anything unsent stays in the local cache and is retried the next time you \
+                connect. Nothing is lost, but it may not be on the server yet.
+                """
+        } else {
+            let count = activity.pendingUploads
+            alert.messageText = count == 1
+                ? "One file has not finished uploading"
+                : "\(count) files have not finished uploading"
+            alert.informativeText = """
+                These files are saved on this Mac but have not reached your storage \
+                provider yet. grrclone can wait for them to finish before quitting.
+
+                If you quit now, they stay in the local cache and are retried the next \
+                time you connect. They will not be lost, but they will not be on the \
+                server either.
+                """
+        }
+
         alert.addButton(withTitle: "Wait and Quit")
         alert.addButton(withTitle: "Cancel")
-
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal() == .alertFirstButtonReturn ? .waitAndQuit : .cancel
     }
 
     @MainActor
-    private static func warnAboutStrandedUploads(count: Int) {
+    private static func reportUncleanShutdown(_ outcome: ConnectionManager.ShutdownOutcome) {
+        var lines: [String] = []
+
+        if outcome.strandedUploads > 0 {
+            lines.append(outcome.strandedUploads == 1
+                ? "One upload did not finish. It stays in the local cache and is retried the next time you connect."
+                : "\(outcome.strandedUploads) uploads did not finish. They stay in the local cache and are retried the next time you connect.")
+        }
+        if !outcome.abandonedMounts.isEmpty {
+            let names = outcome.abandonedMounts
+                .map { ($0 as NSString).lastPathComponent }
+                .joined(separator: ", ")
+            lines.append("""
+                These volumes were left connected because disconnecting them was taking \
+                too long: \(names). They keep working, and grrclone tidies them up the \
+                next time it starts.
+                """)
+        }
+        guard !lines.isEmpty else { return }
+
         let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = count == 1
-            ? "One upload did not finish"
-            : "\(count) uploads did not finish"
-        alert.informativeText = """
-            The files are still in grrclone's local cache and will be retried the next \
-            time you connect this remote. Check your network connection.
-            """
-        alert.addButton(withTitle: "Quit Anyway")
+        alert.alertStyle = .informational
+        alert.messageText = "grrclone did not shut down completely"
+        alert.informativeText = lines.joined(separator: "\n\n")
+        alert.addButton(withTitle: "OK")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
