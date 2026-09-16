@@ -24,6 +24,11 @@ struct MenuBarView: View {
                 .frame(maxHeight: 320)
             }
 
+            if hasActivityToReport {
+                Divider()
+                activityNotice
+            }
+
             if !model.foreignMounts.isEmpty {
                 Divider()
                 foreignNotice
@@ -62,6 +67,45 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(12)
+    }
+
+    /// Kept as a computed property rather than inlined into the `if`. A multi-line
+    /// boolean expression inside a ViewBuilder gets misparsed as a trailing closure.
+    private var hasActivityToReport: Bool {
+        model.pendingUploads > 0 || model.activity.erroredFiles > 0 || model.activity.outOfSpace
+    }
+
+    /// Pending uploads are shown prominently because a write returns as soon as it hits
+    /// the local cache. Without this, a file looks saved in Finder while nothing has
+    /// reached the provider, and closing the lid quietly strands it.
+    private var activityNotice: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if model.pendingUploads > 0 {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(model.pendingUploads == 1
+                         ? "1 file still uploading"
+                         : "\(model.pendingUploads) files still uploading")
+                        .font(.caption)
+                }
+                Text("Saved on this Mac, not yet on the server.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if model.activity.erroredFiles > 0 {
+                Label("\(model.activity.erroredFiles) upload(s) failing, will retry",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if model.activity.outOfSpace {
+                Label("Local cache is out of space", systemImage: "internaldrive.badge.xmark")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     /// Surfaced so the behaviour is visible rather than merely documented: grrclone can
