@@ -126,10 +126,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A tag carrying a pre-release suffix is published as one, so it does not
+          # become the "Latest" download people land on. Without this an -rc or -beta
+          # tag is presented to everyone as the current release.
+          PRERELEASE=""
+          case "$TAG" in
+            *-rc*|*-alpha*|*-beta*) PRERELEASE="--prerelease" ;;
+          esac
+
           gh release create "$TAG" build/grrclone.dmg \
-            --title "grrclone $TAG" \
+            --title "grrclone ${TAG#v}" \
             --generate-notes \
-            --verify-tag || \
+            --verify-tag \
+            $PRERELEASE || \
           gh release upload "$TAG" build/grrclone.dmg --clobber
 
       - name: Remove the signing keychain
