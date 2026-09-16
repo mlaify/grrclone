@@ -133,30 +133,31 @@ Do not re-litigate these without new evidence. Reasoning is in
   the same shape and were fixed together: a check that cannot see a problem must say
   so, not report success. See the session log for 2026-09-16 (fixes).
 
-- **Finder metadata is uploaded to the remote.** `.DS_Store` and AppleDouble `._`
-  sidecars created by Finder land on the storage provider.
+- **`._` sidecars are uploaded to remotes, and cannot be prevented.** `.DS_Store` is
+  solved — Settings has a toggle for the macOS `DSDontWriteNetworkStores` preference,
+  verified to stop both the file and its sidecar appearing. The `._` files are not.
 
-  Investigated 2026-09-16, and the obvious fixes are all ruled out:
+  They hold extended attributes for filesystems that cannot store them natively.
+  NFSv3 cannot, and rclone serves NFSv3; `namedattr`, which would let the server hold
+  them, is NFSv4 only. So macOS writes one beside essentially every file: it attaches
+  `com.apple.provenance` to copies, so even a plain text file with no tags and no
+  quarantine flag gets a sidecar. Measured, not assumed.
 
-  - `--no-appledouble` and `--no-applexattr` are **`mount` (FUSE) flags**. They do not
-    exist on `rclone serve nfs`, so the transport grrclone uses cannot take them.
-  - `serve/start` does accept the filter block, but **`--exclude` does not stop writes
-    reaching the remote.** Tested directly: serving with `--exclude .DS_Store
-    --exclude "._*"`, then writing both through the mount, and both arrived at the
-    provider. Filters govern what rclone lists and reads, not what the VFS writes back.
-  - Deleting them from the remote on a schedule was considered and rejected. grrclone
-    deleting files it did not create is exactly the class of behaviour the mount
-    ownership rule exists to prevent.
+  Everything plausible has been ruled out by testing, not by reading:
+  `--no-appledouble` and `--no-applexattr` are FUSE mount flags that do not exist on
+  `serve nfs`; `--exclude ".DS_Store" --exclude "._*"` does not stop writes reaching
+  the remote, because filters govern what rclone lists and reads, not what the VFS
+  writes back; and `mount_nfs`'s `namedattr` needs NFSv4.
 
-  What remains is a macOS-side setting, `DSDontWriteNetworkStores`, which stops Finder
-  writing `.DS_Store` to network volumes. It is **global** — it affects every network
-  volume, not just grrclone's — and needs a Finder restart, so it cannot simply be set
-  on the user's behalf. A Settings toggle that explains the trade-off is the likely
-  shape of the fix. It is also only half a fix: it does nothing about the `._` sidecars,
-  which macOS writes because NFS has no native extended-attribute support.
+  A scan-and-delete feature was built and then removed: it is a treadmill, not a fix,
+  and it is the one place the app would delete files it did not create. Anyone who
+  wants a one-off clean-up can do it with rclone directly, which is the right tool:
 
-  Unverified as of this note: whether that preference actually applies to a
-  loopback NFS mount under `$HOME`. Test before shipping a toggle that claims to work.
+  ```
+  rclone delete <remote>: --include "._*" --include ".DS_Store" --dry-run
+  ```
+
+  Drop `--dry-run` once the list looks right.
 
 ## Deferred, deliberately
 
