@@ -17,11 +17,29 @@ ENTITLEMENTS="App/grrclone/Resources/grrclone.entitlements"
 
 # Resolve the identity to a hash, never a name.
 #
-# Two certificates can share the exact same common name — an account with a spare
-# Developer ID has this — and `codesign -s "<name>"` then fails outright with
-# "ambiguous". A hash is unique, so this works regardless.
+# Two certificates can share the exact same common name — an account that issued a
+# spare Developer ID has this — and `codesign -s "<name>"` then fails outright with
+# "ambiguous" and signs nothing. A hash is unique, so this works either way.
+#
+# Precedence: an explicit environment override, then the pinned identity, then the
+# only installed certificate. Pinning matters beyond the duplicate: it makes a build
+# reproducible, and it fails loudly if the expected certificate is missing rather than
+# quietly signing with whatever else happens to be in the keychain.
+PIN_FILE="$HOME/.config/grrclone-signing/identity"
+
 if [[ -n "${GRRCLONE_SIGN_IDENTITY:-}" ]]; then
     IDENTITY="$GRRCLONE_SIGN_IDENTITY"
+    SOURCE="GRRCLONE_SIGN_IDENTITY"
+elif [[ -f "$PIN_FILE" ]] && PINNED=$(tr -d '[:space:]' < "$PIN_FILE") && [[ -n "$PINNED" ]]; then
+    if ! security find-identity -v -p codesigning | grep -q "$PINNED"; then
+        echo "The pinned signing certificate is not installed:"
+        echo "  $PINNED   (from $PIN_FILE)"
+        echo
+        echo "Either install it, or delete that file to fall back to auto-selection."
+        exit 1
+    fi
+    IDENTITY="$PINNED"
+    SOURCE="$PIN_FILE"
 else
     mapfile -t HASHES < <(security find-identity -v -p codesigning \
         | grep "Developer ID Application" \
@@ -31,21 +49,21 @@ else
         0)  echo "No Developer ID Application certificate found."
             echo "Run scripts/install-developer-id.sh first."
             exit 1 ;;
-        1)  IDENTITY="${HASHES[0]}" ;;
+        1)  IDENTITY="${HASHES[0]}"; SOURCE="the only one installed" ;;
         *)  echo "More than one Developer ID Application certificate is installed:"
             security find-identity -v -p codesigning | grep "Developer ID Application" | sed 's/^/  /'
             echo
-            echo "Pick one and re-run with it, for example:"
-            echo "  GRRCLONE_SIGN_IDENTITY=${HASHES[0]} $0"
+            echo "Pin the one to use:"
+            echo "  echo ${HASHES[0]} > $PIN_FILE"
             echo
-            echo "Revoking the spare at Apple and deleting it from Keychain Access will"
-            echo "make this unnecessary."
+            echo "Revoking the spare at Apple and removing it from the keychain makes"
+            echo "this unnecessary. scripts/remove-spare-cert.sh helps with the second part."
             exit 1 ;;
     esac
 fi
 
 echo "Signing with $IDENTITY"
-security find-certificate -c "Developer ID Application" -p 2>/dev/null >/dev/null || true
+echo "  (identity chosen from: $SOURCE)"
 
 # Sign inside-out, and never with --deep.
 #
