@@ -41,7 +41,14 @@ elif [[ -f "$PIN_FILE" ]] && PINNED=$(tr -d '[:space:]' < "$PIN_FILE") && [[ -n 
     IDENTITY="$PINNED"
     SOURCE="$PIN_FILE"
 else
-    mapfile -t HASHES < <(security find-identity -v -p codesigning \
+    # A plain loop, not `mapfile`: that is a bash 4 builtin and macOS ships bash 3.2,
+    # so `mapfile: command not found` aborted this branch on every stock Mac. It went
+    # unnoticed because a pinned identity short-circuits it, which is the usual case
+    # here but not on a fresh clone or in CI.
+    HASHES=()
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && HASHES+=("$line")
+    done < <(security find-identity -v -p codesigning \
         | grep "Developer ID Application" \
         | awk '{print $2}')
 

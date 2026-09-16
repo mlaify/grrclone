@@ -2,14 +2,17 @@
 #
 # Remove a superfluous Developer ID certificate from the login keychain.
 #
-# This only cleans up locally. **Revoke the certificate at Apple first**, at
-# https://developer.apple.com/account/resources/certificates/list — otherwise it keeps
-# occupying one of the account's limited Developer ID slots even though nothing can use
-# it any more.
+# This cleans up locally only, and local is as far as it goes: Apple offers no
+# self-service revocation for Developer ID certificates. That is deliberate — revoking
+# one invalidates every application ever signed with it — so a spare stays on the
+# account permanently unless Developer Support removes it.
 #
-# Do it in that order on purpose. If you revoke the wrong certificate at Apple, having
-# the other one still in the keychain is what lets you recover. Deleting the private key
-# first removes that option, and Apple will not reissue a key it never had.
+# Deleting it here is therefore cosmetic but useful: it stops `codesign -s "<name>"`
+# being ambiguous and declutters `security find-identity`. The certificate remains
+# valid at Apple and simply goes unused.
+#
+# Still irreversible on this machine. The private key cannot be recovered or reissued,
+# so be certain you are naming the spare and not the one you sign with.
 #
 #   scripts/remove-spare-cert.sh <sha1-hash-of-the-certificate-to-remove>
 #
@@ -51,8 +54,8 @@ fi
 echo "About to remove this certificate and its private key from the login keychain:"
 security find-identity -v -p codesigning | grep "$HASH" | sed 's/^/  /'
 echo
-echo "This is irreversible. The private key cannot be recovered or reissued."
-echo "Confirm you have already revoked this certificate at Apple."
+echo "This is irreversible. The private key cannot be recovered or reissued,"
+echo "and Apple will not reissue a key it never held."
 read -r -p "Type the last 4 characters of the hash to confirm: " reply
 
 if [[ "${HASH: -4}" != "$(echo "$reply" | tr '[:lower:]' '[:upper:]')" ]]; then

@@ -120,10 +120,10 @@ Do not re-litigate these without new evidence. Reasoning is in
   are reproducible, and a missing certificate fails loudly instead of silently signing
   with whatever else is in the keychain.
 
-  Optional tidying: `scripts/remove-spare-cert.sh 215267BB8FDA7F86E1C6163010B6FF2D877AF016`
-  deletes the spare from this machine's keychain. The certificate stays valid at Apple
-  but stops cluttering `security find-identity`. Only worth doing on a machine where
-  the ambiguity is a nuisance.
+  **Done on the development machine**: the spare was deleted from the keychain, so
+  `codesign` is no longer ambiguous there. The certificate remains valid on the account
+  and simply goes unused. Any new machine will see it again if that keychain is
+  restored from a backup, which is another reason the pin stays.
 - **The Developer ID certificate expires 2027-02-01**, much sooner than the usual five
   years, which normally means it is capped by the membership renewal date. Worth
   confirming before relying on it for a release cycle.
@@ -189,9 +189,13 @@ Recorded because each cost real time and each is easy to repeat.
 12. **Never filter a build script's output without checking its exit status.** A
    `grep` over the log hid a hard failure twice here: the script had aborted on an
    undefined variable, and the summary looked plausible enough to believe.
-13. **Verify that a check can fail, not just that it passes.** Three of four CI checks
+13. **macOS ships bash 3.2, so `mapfile` does not exist.** A branch using it aborted
+   with "command not found" on every stock Mac, and went unnoticed for days because
+   the common path short-circuited around it. Prefer `while IFS= read -r` loops, and
+   test the branch that normally does not run.
+14. **Verify that a check can fail, not just that it passes.** Three of four CI checks
    were broken in ways that still reported success on a clean tree.
-14. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
+15. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
    "Cannot install under Rosetta 2 in ARM default prefix". Prefix with `arch -arm64`.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
