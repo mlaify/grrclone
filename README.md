@@ -38,3 +38,20 @@ creation, and broken large-directory listings.
 ## License
 
 MIT
+
+## Trying the core
+
+The headless harness exercises everything the app will do:
+
+```bash
+swift build
+.build/debug/grrclonectl doctor        # environment check
+.build/debug/grrclonectl remotes       # remotes from rclone.conf
+.build/debug/grrclonectl connect dav1 Cloud
+.build/debug/grrclonectl mounts        # what grrclone owns, and what it does not
+.build/debug/grrclonectl disconnect Cloud
+.build/debug/grrclonectl reconcile     # clean up after an unclean shutdown
+```
+
+grrclone never unmounts anything it did not create. If you already run rclone by hand,
+`mounts` lists your mounts under "does NOT own" and leaves them alone.
