@@ -1,0 +1,137 @@
+name: Release
+
+# Tag pushes only.
+#
+# Deliberately not `pull_request`: this job has access to the signing certificate and
+# the notarisation key, and a pull request from a fork must never be able to run a
+# workflow that can read them. Tags can only be pushed by someone with write access.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (workflow_dispatch only)"
+        required: true
+
+permissions:
+  contents: write   # to create the release and upload the DMG
+
+jobs:
+  release:
+    name: Build, sign, notarise
+    runs-on: macos-15
+    # Signing secrets are exposed to this job, so pin it to an environment. That lets
+    # required reviewers gate it, and keeps the secrets out of every other workflow.
+    environment: release
+
+    steps:
+      # The dispatch input is validated before it reaches `ref:` or any shell. Only
+      # someone with write access can trigger this, so it is not an untrusted-input
+      # problem in the usual sense — but a workflow holding signing secrets should not
+      # interpolate a free-text field into a git ref or a command line regardless.
+      - name: Resolve and validate the tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          if ! printf '%s' "$TAG" | grep -qE '^v[0-9A-Za-z._-]+$'; then
+            echo "::error::refusing to build tag '$TAG'; expected v<version>"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the app icon
+        run: |
+          set -o pipefail
+          swift scripts/make-icon.swift
+          iconutil -c icns build/AppIcon.iconset -o App/grrclone/Resources/AppIcon.icns
+
+      - name: Cache the bundled rclone
+        id: rclone-cache
+        uses: actions/cache@v4
+        with:
+          path: App/grrclone/Resources/rclone
+          key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
+
+      - name: Fetch the bundled rclone
+        if: steps.rclone-cache.outputs.cache-hit != 'true'
+        run: scripts/fetch-rclone.sh
+
+      # An ephemeral keychain, deleted in the always() step below. Importing into the
+      # runner's default keychain would leave the private key sitting in the image
+      # cache if the job failed before cleanup.
+      - name: Import the signing certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$CERTIFICATE_P12" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Without this, codesign blocks on a UI prompt that nobody can answer and the
+          # job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychain -d user -s build.keychain
+          rm -f /tmp/cert.p12
+          security find-identity -v -p codesigning | grep "Developer ID Application"
+
+      - name: Store notarisation credentials
+        env:
+          API_KEY: ${{ secrets.APPSTORE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPSTORE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          echo "$API_KEY" | base64 --decode > /tmp/AuthKey.p8
+          xcrun notarytool store-credentials AC_NOTARY \
+            --key /tmp/AuthKey.p8 --key-id "$API_KEY_ID" --issuer "$API_ISSUER" \
+            --keychain build.keychain
+          rm -f /tmp/AuthKey.p8
+
+      # The same script used locally, so a release from CI and a release from a laptop
+      # are the same artefact produced the same way.
+      - name: Build, sign, notarise, staple
+        env:
+          GRRCLONE_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY_SHA1 }}
+        run: scripts/release.sh
+
+      - name: Verify as a downloaded file would be
+        run: |
+          set -euo pipefail
+          cp build/grrclone.dmg /tmp/dl.dmg
+          # The attribute Gatekeeper actually reacts to. Without it spctl assesses a
+          # local file and can pass something a real download would not.
+          xattr -w com.apple.quarantine "0083;00000000;Safari;" /tmp/dl.dmg
+          spctl -a -vvv -t open --context context:primary-signature /tmp/dl.dmg
+          xcrun stapler validate /tmp/dl.dmg
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" build/grrclone.dmg \
+            --title "grrclone $TAG" \
+            --generate-notes \
+            --verify-tag || \
+          gh release upload "$TAG" build/grrclone.dmg --clobber
+
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain build.keychain || true
