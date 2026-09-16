@@ -15,7 +15,7 @@ no signed build.
 | M0 — performance gate | **Done.** NFS passed; see [benchmarks.md](benchmarks.md) |
 | M1 — headless core | **Done.** Verified end to end against real remotes |
 | M2 — menu bar app | **Done.** Connects, disconnects, connects at login |
-| M3 — robustness and release | **In progress.** Self-healing, quit safety and CI done; signing not started |
+| M3 — robustness and release | **Done.** Self-healing, quit safety, CI, and a notarised DMG |
 | M4 — reach | Not started |
 
 ## Done
@@ -79,8 +79,9 @@ In rough priority order.
    generated.
 2. **Bundle a pinned rclone**, universal, re-signed with our own team ID, checksummed at
    build time.
-3. **DMG and a GitHub Actions release workflow**, using the App Store Connect API key
-   for unattended notarisation.
+2. **A GitHub Actions release workflow**, so tagging produces the DMG that
+   `scripts/release.sh` now produces locally. Signing secrets must stay off pull
+   requests, including forks.
 5. **Encrypted `rclone.conf` support** via `config/unlock`, password in Keychain.
 6. **Bandwidth limit** via `core/bwlimit`.
 7. **Log viewer**, so failures are diagnosable without a terminal.
@@ -192,6 +193,24 @@ Recorded because each cost real time and each is easy to repeat.
 
 Newest first. One entry per working session, recording what changed and what was
 learned, so the reasoning survives even when the code moves on.
+
+### 2026-09-16 (release) — signed, notarised, distributable
+
+grrclone now builds into a notarised DMG that Gatekeeper accepts:
+`source=Notarized Developer ID`. `scripts/release.sh` does build, sign, notarise,
+staple, package, notarise again and staple again, then verifies the result the way a
+user's Mac would.
+
+Both the app and the disk image are notarised and stapled separately. Each needs its
+own ticket: stapling the app keeps it trusted once dragged out of the image, and
+stapling the image satisfies Gatekeeper before anything is copied anywhere.
+
+Two things went wrong getting the certificate installed, both worth remembering.
+Homebrew's OpenSSL 3 writes PKCS#12 with a SHA-256 MAC that macOS Security rejects,
+reporting it as a wrong password when the password was correct — the keychain takes the
+key and certificate directly and needs no password at all. And the account held two
+Developer ID certificates with identical common names, which makes `codesign -s
+"<name>"` fail as ambiguous and sign nothing; signing is pinned to a hash instead.
 
 ### 2026-09-16 (fixes) — quit safety made honest
 
