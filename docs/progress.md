@@ -68,7 +68,12 @@ In rough priority order.
    produces those results and the condition can never be satisfied. Until it is
    removed, every pull request needs an admin override to merge. **Needs the
    maintainer**, since org rulesets are not writable from here.
-1. **Developer ID signing and notarisation.** Blocks distribution entirely, and
+1. **Developer ID signing and notarisation.** Key and certificate request are
+   generated at `~/.config/grrclone-signing` (outside the repo, since it is public).
+   **Needs the maintainer**: upload `developer-id.csr` at
+   <https://developer.apple.com/account/resources/certificates/add>, choose
+   **Developer ID Application**, then run `scripts/install-developer-id.sh <the .cer>`.
+   Only the Account Holder can create this certificate type. Blocks distribution entirely, and
    Homebrew now requires notarisation. **Needs the maintainer**: the local certificate
    is an Apple Development one, and a Developer ID Application certificate must be
    generated.

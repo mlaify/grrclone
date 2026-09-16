@@ -7,3 +7,14 @@ App/grrclone/Resources/rclone
 build/
 bench-results/
 App/grrclone.xcodeproj
+
+# Signing material. The real key lives in ~/.config/grrclone-signing, outside this
+# repo entirely, but these patterns are a second line of defence for a public repo.
+*.p12
+*.cer
+*.pem
+*.key
+*.csr
+*.p8
+*.mobileprovision
+*.provisionprofile
