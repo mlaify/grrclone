@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift') }}-${{ hashFiles('Sources/**/*.swift') }}
+          restore-keys: spm-${{ runner.os }}-${{ hashFiles('Package.swift') }}-
+
+      # The core deliberately has no Xcode dependency, so this runs on its own.
+      - name: Test the core
+        run: swift test --enable-code-coverage
+
+      # These tests must not need a mounted remote or a running rclone. Anything that
+      # does lives in grrclonectl instead, because CI has neither.
+      - name: Check the suite stayed hermetic
+        run: |
+          if pgrep -f "rclone rcd" >/dev/null; then
+            echo "::error::a test left an rclone daemon running"; exit 1
+          fi
+          if mount | grep -q "localhost:/"; then
+            echo "::error::a test left an NFS mount behind"; exit 1
+          fi
+
+  app:
+    name: Build the app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # Unsigned: CI has no Developer ID certificate. Release signing is a separate,
+      # tag-triggered workflow so that signing secrets never run on pull requests,
+      # including ones from forks.
+      - name: Build unsigned
+        run: |
+          cd App && xcodegen generate
+          cd ..
+          xcodebuild -project App/grrclone.xcodeproj -scheme grrclone \
+            -configuration Release -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build \
+            | grep -E "(warning|error): |^\*\* BUILD" || true
+          test -d build/Build/Products/Release/grrclone.app
+
+  privacy:
+    name: No phone-home
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # grrclone's central promise is that it contacts nothing but the user's own
+      # storage providers. A hard failure, not a review convention. Contributors can
+      # run the same script locally before pushing.
+      - name: Check privacy guarantees
+        run: scripts/check-privacy.sh
