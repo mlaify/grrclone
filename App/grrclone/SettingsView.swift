@@ -65,6 +65,21 @@ struct SettingsView: View {
     private var generalTab: some View {
         Form {
             LaunchAtLoginToggle()
+            Section {
+                DSStoreToggle()
+            } footer: {
+                Text("""
+                     Finder writes a hidden .DS_Store file into every folder it opens, \
+                     and on a remote those get uploaded. This stops it for all network \
+                     volumes, not only grrclone's, and takes effect once Finder \
+                     restarts.
+
+                     It does not stop the ._ files. Those carry attributes that NFS \
+                     cannot store, so macOS writes one beside almost every file, and \
+                     nothing on this side can prevent it.
+                     """)
+                .font(.caption).foregroundStyle(.secondary)
+            }
             LabeledContent("Mount folder") {
                 Text(model.mountRoot.path)
                     .font(.caption)
@@ -173,6 +188,42 @@ private struct ConnectionDetail: View {
         updated.options.vfsCacheMaxSize = cacheSize.isEmpty ? "20G" : cacheSize
         updated.connectAtLogin = connectAtLogin
         model.update(updated)
+    }
+}
+
+/// Toggles the system preference that keeps `.DS_Store` off network volumes.
+///
+/// Writing to another application's defaults domain is unusual, and done here because
+/// there is no other way: the setting belongs to Finder, not to grrclone. It is
+/// presented as the system-wide change it is rather than as an app setting.
+private struct DSStoreToggle: View {
+    @State private var enabled = !FinderMetadata.writesDSStoreToNetworkVolumes
+    @State private var needsRelaunch = false
+
+    var body: some View {
+        Toggle("Stop Finder writing .DS_Store to network volumes", isOn: $enabled)
+            .onChange(of: enabled) { _, wanted in
+                UserDefaults(suiteName: "com.apple.desktopservices")?
+                    .set(wanted, forKey: "DSDontWriteNetworkStores")
+                needsRelaunch = true
+            }
+        if needsRelaunch {
+            HStack {
+                Text("Finder must restart for this to take effect.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                // Offered rather than done automatically: relaunching Finder closes
+                // the user's windows, which is not grrclone's decision to make.
+                Button("Relaunch Finder") {
+                    let task = Process()
+                    task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+                    task.arguments = ["Finder"]
+                    try? task.run()
+                    needsRelaunch = false
+                }
+                .controlSize(.small)
+            }
+        }
     }
 }
 
