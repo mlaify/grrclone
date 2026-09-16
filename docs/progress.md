@@ -219,7 +219,12 @@ Recorded because each cost real time and each is easy to repeat.
    was corrected, but the bad file it had already written stayed on disk, went into a
    repository secret, and failed a release hours later. When a producer is fixed,
    regenerate its output or verify what exists.
-16. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
+16. **`notarytool --keychain` needs a path, not a name**, and `security create-keychain`
+   puts a bare name in `~/Library/Keychains` with a `-db` suffix. Create the keychain
+   at an absolute `.keychain-db` path and use that one string everywhere. Note also
+   that `notarytool submit` reads its stored profile from the *default* keychain unless
+   told otherwise, so a throwaway keychain must be passed to every invocation.
+17. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
    "Cannot install under Rosetta 2 in ARM default prefix". Prefix with `arch -arm64`.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
