@@ -21,8 +21,13 @@ pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 # avoided — both of which happened on the first attempt.
 sources() { git ls-files 'Sources/*.swift' 'App/*.swift'; }
 
-# Strip // and /// comments so a comment discussing a forbidden API is not a violation.
-strip_comments() { sed 's|//.*||'; }
+# Strip comments so a note explaining why an API is avoided is not itself a violation.
+#
+# A naive `s|//.*||` also eats the rest of any URL, because `https://` contains `//`.
+# That silently defeats the analytics check: `"https://mixpanel.com/x"` becomes
+# `"https:` and the forbidden name disappears before it can be matched. So `//` is
+# treated as a comment only when it is not part of a scheme separator.
+strip_comments() { sed -e 's|^[[:space:]]*//.*||' -e 's|\([^:]\)//.*|\1|'; }
 
 scan() { # name pattern
     local name="$1" pattern="$2" hits
@@ -51,8 +56,26 @@ scan "no rclone web GUI (downloads code at runtime)" \
 
 # rclone's NFS and WebDAV servers implement no authentication whatsoever. Binding one to
 # anything but loopback publishes the user's entire storage account to the local network.
-scan "servers bind to loopback only" \
-     '"addr"[[:space:]]*:[[:space:]]*\.string\("(0\.0\.0\.0|:)'
+#
+# Allow-list, not deny-list. Enumerating bad forms missed `[::]:0`, a LAN address, and
+# anything built by interpolation; the only safe rule is that every bind literal must
+# start with a loopback host.
+check_binds() {
+    local bad
+    bad=$(sources | while read -r f; do
+        strip_comments < "$f" \
+            | grep -nE '"addr"[[:space:]]*:' \
+            | grep -vE '\.string\("(localhost|127\.0\.0\.1|\[::1\]):' \
+            | sed "s|^|$f:|"
+    done)
+    if [[ -n "$bad" ]]; then
+        fail "servers bind to loopback only"
+        echo "$bad" | sed 's/^/        /'
+    else
+        pass "servers bind to loopback only"
+    fi
+}
+check_binds
 
 # Anything fetched at runtime bypasses the pinned, checksummed rclone we ship.
 scan "no runtime downloads of executables" \

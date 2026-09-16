@@ -60,13 +60,22 @@ jobs:
       # tag-triggered workflow so that signing secrets never run on pull requests,
       # including ones from forks.
       - name: Build unsigned
+        # pipefail so xcodebuild's exit status survives the grep that trims its output.
+        # Without it, `| grep ... || true` swallows every build failure, and checking for
+        # the .app afterwards is not a substitute: Xcode creates that directory early, so
+        # it exists even when the build fails.
+        shell: bash
         run: |
-          cd App && xcodegen generate
-          cd ..
+          set -o pipefail
+          cd App && xcodegen generate && cd ..
           xcodebuild -project App/grrclone.xcodeproj -scheme grrclone \
             -configuration Release -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO build \
-            | grep -E "(warning|error): |^\*\* BUILD" || true
+            | grep -E "(warning|error): |^\*\* BUILD" || BUILD_STATUS=$?
+          # grep exits 1 when it matches nothing, which is a clean quiet build.
+          if [[ "${BUILD_STATUS:-0}" != "0" && "${BUILD_STATUS:-0}" != "1" ]]; then
+            echo "::error::xcodebuild failed with status ${BUILD_STATUS}"; exit 1
+          fi
           test -d build/Build/Products/Release/grrclone.app
 
   privacy:
