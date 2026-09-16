@@ -67,17 +67,13 @@ security import "$KEY" -k "$HOME/Library/Keychains/login.keychain-db" \
 security import "$DIR/developer-id.pem" -k "$HOME/Library/Keychains/login.keychain-db" \
     -T /usr/bin/codesign -T /usr/bin/security 2>&1 | sed 's/^/  /' || true
 
-# A .p12 is still wanted for CI, which has no keychain to import from. Written with
-# SHA-1 MAC and 3DES so macOS and the GitHub runner can both read it.
+# A .p12 is only needed for CI, which has no keychain to import from, so it is left to
+# a separate script that also verifies the result imports. Generating one here without
+# that check is what put an unreadable .p12 into a repository secret and failed a
+# release: OpenSSL 3's default SHA-256 MAC is rejected by macOS, and the error blames
+# the password.
 echo
-echo "Now a .p12 for CI. Choose a strong password; you will need it as a repo secret."
-echo "(Press Ctrl-C to skip if you are not setting up CI yet.)"
-openssl pkcs12 -export \
-    -inkey "$KEY" \
-    -in "$DIR/developer-id.pem" \
-    -out "$DIR/developer-id.p12" \
-    -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES
-chmod 600 "$DIR/developer-id.p12"
+echo "Local signing is ready. For CI, run scripts/export-p12.sh to produce a .p12."
 
 echo
 echo "Verifying…"

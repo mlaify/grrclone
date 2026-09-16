@@ -215,7 +215,11 @@ Recorded because each cost real time and each is easy to repeat.
    test the branch that normally does not run.
 14. **Verify that a check can fail, not just that it passes.** Three of four CI checks
    were broken in ways that still reported success on a clean tree.
-15. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
+15. **Fixing a generator does not fix what it already generated.** The PKCS#12 export
+   was corrected, but the bad file it had already written stayed on disk, went into a
+   repository secret, and failed a release hours later. When a producer is fixed,
+   regenerate its output or verify what exists.
+16. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
    "Cannot install under Rosetta 2 in ARM default prefix". Prefix with `arch -arm64`.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
