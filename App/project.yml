@@ -15,6 +15,16 @@ targets:
     platform: macOS
     sources:
       - path: grrclone
+      # The bundled rclone is fetched by scripts/fetch-rclone.sh and gitignored, so the
+      # project must tolerate its absence: a plain `swift test` or a contributor who has
+      # not run the fetch script should still build. optional:true does that.
+      - path: grrclone/Resources/AppIcon.icns
+        type: file
+        buildPhase: resources
+      - path: grrclone/Resources/rclone
+        type: file
+        optional: true
+        buildPhase: resources
     dependencies:
       - package: GrrClone
         product: GrrCloneCore
