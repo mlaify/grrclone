@@ -81,6 +81,19 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # macOS cannot read a PKCS#12 with a SHA-256 MAC, which is OpenSSL 3's
+          # default, and reports it as a wrong password. Say so plainly rather than
+          # letting someone chase a password that was never the problem.
+          MAC=$(openssl pkcs12 -in /tmp/cert.p12 -info -noout -passin pass:x 2>&1 \
+                  | grep -iE '^MAC:' || true)
+          echo "certificate bundle $MAC"
+          case "$MAC" in
+            *sha256*)
+              echo "::error::This .p12 uses a SHA-256 MAC and macOS cannot import it."
+              echo "::error::Regenerate with scripts/export-p12.sh and update MACOS_CERTIFICATE_P12."
+              exit 1 ;;
+          esac
+
           security import /tmp/cert.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
           # Without this, codesign blocks on a UI prompt that nobody can answer and the

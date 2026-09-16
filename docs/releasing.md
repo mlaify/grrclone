@@ -38,10 +38,16 @@ base64 -i ~/.config/grrclone-signing/developer-id.p12 | pbcopy   # then paste
 base64 -i ~/Downloads/AuthKey_XXXXXXXXXX.p8 | pbcopy
 ```
 
-If the `.p12` does not exist yet, `scripts/install-developer-id.sh` creates one. It
-must be exported with a SHA-1 MAC and 3DES, which that script does: OpenSSL 3's default
-SHA-256 MAC produces a file macOS cannot read, and the error misleadingly blames the
-password.
+Produce the `.p12` with **`scripts/export-p12.sh`**, never a bare `openssl pkcs12
+-export`. OpenSSL 3 defaults to a SHA-256 MAC, which macOS cannot read, and reports as:
+
+```
+SecKeychainItemImport: MAC verification failed during PKCS12 import (wrong password?)
+```
+
+The password is not the problem. The script writes a SHA-1 MAC with 3DES and then
+proves the file imports into a throwaway keychain before you upload it — a check added
+after an unverified `.p12` reached a repository secret and failed a release.
 
 ## What the workflow does, and why
 
