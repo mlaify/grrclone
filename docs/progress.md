@@ -68,12 +68,12 @@ In rough priority order.
    produces those results and the condition can never be satisfied. Until it is
    removed, every pull request needs an admin override to merge. **Needs the
    maintainer**, since org rulesets are not writable from here.
-1. **Developer ID signing and notarisation.** Key and certificate request are
-   generated at `~/.config/grrclone-signing` (outside the repo, since it is public).
-   **Needs the maintainer**: upload `developer-id.csr` at
-   <https://developer.apple.com/account/resources/certificates/add>, choose
-   **Developer ID Application**, then run `scripts/install-developer-id.sh <the .cer>`.
-   Only the Account Holder can create this certificate type. Blocks distribution entirely, and
+1. **Notarisation.** Signing is done: `scripts/sign-app.sh` produces a valid
+   Developer ID signature with the hardened runtime, verified against a Release build.
+   Gatekeeper still rejects it, which is correct until a notarisation ticket exists.
+   **Needs the maintainer**: an App Store Connect API key (`.p8`) from
+   <https://appstoreconnect.apple.com/access/integrations/api>, then
+   `xcrun notarytool store-credentials AC_NOTARY …`. Blocks distribution entirely, and
    Homebrew now requires notarisation. **Needs the maintainer**: the local certificate
    is an Apple Development one, and a Developer ID Application certificate must be
    generated.
@@ -105,8 +105,17 @@ Do not re-litigate these without new evidence. Reasoning is in
 | Read `rclone.conf`, never write it | People depend on it from the command line |
 | One daemon, N servers | Unified stats and teardown. Tradeoff: a crash drops all mounts, handled by reconciliation |
 | Ownership from our registry only | A user's own mounts are indistinguishable in the mount table |
+| Sign by certificate hash, not name | Two certificates can share a common name, and `codesign -s "<name>"` then fails as ambiguous |
 
 ## Known issues
+
+- **Two Developer ID Application certificates are installed**, issued six minutes apart
+  and sharing a common name, so `codesign -s "<name>"` fails as ambiguous.
+  `scripts/sign-app.sh` works around it by signing with a certificate hash. Revoking
+  the spare at Apple and deleting it from Keychain Access would remove the need.
+- **The Developer ID certificate expires 2027-02-01**, much sooner than the usual five
+  years, which normally means it is capped by the membership renewal date. Worth
+  confirming before relying on it for a release cycle.
 
 - **Quit safety is only as good as what it can observe.** Three defects here all had
   the same shape and were fixed together: a check that cannot see a problem must say
