@@ -12,13 +12,13 @@
 #   3. scripts/identify-certs.sh ~/Downloads/developerID_application*.cer
 #
 # Each file is hashed and compared against the identity grrclone signs with, so the
-# spare is named explicitly rather than guessed. Then, in this order:
+# spare is named explicitly rather than guessed.
 #
-#   - revoke the spare in the portal (match it by the *download filename* this prints)
-#   - run scripts/remove-spare-cert.sh <hash> to clear it from the keychain
-#
-# Revoke first. If the wrong one is revoked, still holding the other private key
-# locally is the only way back, and Apple cannot reissue a key it never had.
+# Note that a spare cannot be removed from the account: Apple offers no self-service
+# revocation for Developer ID certificates, deliberately, since revoking one would
+# invalidate every application ever signed with it. The practical remedy is local —
+# `scripts/remove-spare-cert.sh <hash>` clears it from the keychain so `codesign` stops
+# being ambiguous — plus pinning the identity, which is good practice regardless.
 #
 set -euo pipefail
 
@@ -78,12 +78,11 @@ for f in "$@"; do
 done
 
 cat <<'NEXT'
-To revoke the spare, find its row in the portal. The portal shows only name, type and
-dates, so match on the creation date above — and if both were created the same day,
-download them again one at a time and re-run this after each, so the filename tells you
-which row you clicked.
+A spare cannot be removed from the account — Apple has no self-service revocation for
+Developer ID, since revoking one invalidates everything ever signed with it. What you
+can do is clear it from this machine so codesign stops being ambiguous:
 
-Then, in this order:
-  1. Revoke it in the portal.
-  2. scripts/remove-spare-cert.sh <the SPARE sha1 above>
+  scripts/remove-spare-cert.sh <the SPARE sha1 above>
+
+Pinning the signing identity handles the rest, and is worth keeping either way.
 NEXT
