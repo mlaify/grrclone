@@ -15,7 +15,7 @@ no signed build.
 | M0 — performance gate | **Done.** NFS passed; see [benchmarks.md](benchmarks.md) |
 | M1 — headless core | **Done.** Verified end to end against real remotes |
 | M2 — menu bar app | **Done.** Connects, disconnects, connects at login |
-| M3 — robustness and release | **In progress.** Self-healing done; signing not started |
+| M3 — robustness and release | **In progress.** Self-healing, quit safety and CI done; signing not started |
 | M4 — reach | Not started |
 
 ## Done
@@ -64,6 +64,10 @@ concludes, wrongly, that everything is stored.
 
 In rough priority order.
 
+0. **Remove `code_scanning` from the branch ruleset.** CodeQL was dropped, so nothing
+   produces those results and the condition can never be satisfied. Until it is
+   removed, every pull request needs an admin override to merge. **Needs the
+   maintainer**, since org rulesets are not writable from here.
 1. **Developer ID signing and notarisation.** Blocks distribution entirely, and
    Homebrew now requires notarisation. **Needs the maintainer**: the local certificate
    is an Apple Development one, and a Developer ID Application certificate must be
@@ -149,6 +153,10 @@ Recorded because each cost real time and each is easy to repeat.
    `uploadsQueued` and `uploadsInProgress`; safety checks need the sum.
 10. **A multi-line boolean inside a SwiftUI ViewBuilder is misparsed** as a trailing
    closure. Hoist it into a computed property.
+11. **Verify that a check can fail, not just that it passes.** Three of four CI checks
+   were broken in ways that still reported success on a clean tree.
+12. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
+   "Cannot install under Rosetta 2 in ARM default prefix". Prefix with `arch -arm64`.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
    measurements read 3200 MB/s and meant nothing.
@@ -157,6 +165,36 @@ Recorded because each cost real time and each is easy to repeat.
 
 Newest first. One entry per working session, recording what changed and what was
 learned, so the reasoning survives even when the code moves on.
+
+### 2026-09-16 (later) — public, with CI
+
+- Repository made public. The decision was taken knowingly: the commit history carries
+  the author's work email and, in four early commits, a macOS username and home paths.
+  Publishing is effectively irreversible, so this was confirmed rather than assumed.
+- CI added: `swift test`, an unsigned app build, and a privacy check that enforces the
+  no-phone-home guarantee as a build failure rather than a review convention.
+- CodeQL was added, then removed at the maintainer's request. Swift analysis took over
+  ten minutes per run and needed two environment workarounds before it would build the
+  app target at all.
+- Both pull requests merged with an admin override, because the ruleset requires a
+  review the sole author cannot give.
+
+An automated review on the CI pull request found four real defects in the new checks,
+all confirmed and fixed. Worth recording, because three of them made a check *look*
+like it worked:
+
+1. `| grep … || true` discarded every xcodebuild failure, and the follow-up `test -d`
+   was no substitute, since Xcode creates the `.app` directory early enough to survive
+   a failed build.
+2. CodeQL's autobuild compiled only the SwiftPM targets, so everything under
+   `App/grrclone` went unscanned.
+3. Stripping `//` comments also ate the rest of any URL, so `"https://mixpanel.com/x"`
+   became `"https:` and the analytics check silently missed it. A live false negative.
+4. The loopback rule enumerated bad bind forms instead of requiring good ones, missing
+   `[::]:0`, LAN addresses, and anything built by interpolation.
+
+The lesson generalises: a check that has never been observed to fail is not known to
+work. Every rule in `scripts/check-privacy.sh` now has a verified failing case.
 
 ### 2026-09-16 — from empty directory to working app
 
