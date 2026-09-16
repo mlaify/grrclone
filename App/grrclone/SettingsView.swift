@@ -15,27 +15,50 @@ struct SettingsView: View {
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 520, height: 360)
+        // Sized for the tallest tab, Connections. A Settings window that resizes as
+        // you switch tabs looks broken, so every tab gets the same frame.
+        .frame(width: 520, height: 500)
     }
 
+    /// A picker and a form, not a split view.
+    ///
+    /// An `HSplitView` here ran edge to edge: its list sat under the window's title
+    /// bar with the traffic lights on top of the first row, and its divider carried on
+    /// up through the tab strip. A sidebar is right for a large window and wrong for a
+    /// 520-point settings pane. This also matches the other two tabs, which are forms.
     private var connectionsTab: some View {
-        HSplitView {
-            List(model.rows, selection: $selection) { row in
-                Label(row.connection.displayName, systemImage: row.state.symbolName)
-                    .tag(row.connection.id)
-            }
-            .frame(minWidth: 160)
-
-            Group {
-                if let id = selection, let row = model.rows.first(where: { $0.id == id }) {
-                    ConnectionDetail(connection: row.connection, model: model)
-                } else {
-                    Text("Select a connection")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Form {
+            Section {
+                Picker("Connection", selection: $selection) {
+                    Text("Choose…").tag(UUID?.none)
+                    ForEach(model.rows) { row in
+                        Text(row.connection.displayName).tag(Optional(row.connection.id))
+                    }
                 }
             }
-            .frame(minWidth: 320)
+
+            if let id = selection, let row = model.rows.first(where: { $0.id == id }) {
+                ConnectionDetail(connection: row.connection, model: model)
+            } else {
+                Section {
+                    Text(model.rows.isEmpty
+                         ? "No remotes found. Add one with `rclone config`."
+                         : "Choose a connection above to change how it is mounted.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        // Land on something useful. Opening to an empty pane and a "Choose…" prompt
+        // makes the user do a step the app can do for them, and with one remote
+        // configured there is nothing to choose.
+        .onAppear {
+            if selection == nil { selection = model.rows.first?.id }
+        }
+        .onChange(of: model.rows.map(\.id)) { _, ids in
+            if let selection, !ids.contains(selection) { self.selection = ids.first }
+            if selection == nil { selection = ids.first }
         }
     }
 
@@ -77,6 +100,10 @@ struct SettingsView: View {
     }
 }
 
+/// Settings for one connection.
+///
+/// Emits `Section`s rather than its own `Form`: it is placed inside the Connections
+/// tab's form, and a nested form draws a second inset background inside the first.
 private struct ConnectionDetail: View {
     let connection: Connection
     @ObservedObject var model: AppModel
@@ -87,11 +114,12 @@ private struct ConnectionDetail: View {
     @State private var connectAtLogin = false
 
     var body: some View {
-        Form {
+        Group {
             Section {
                 LabeledContent("Remote", value: connection.fsSpec)
                 TextField("Name", text: $displayName)
-                Text("Also the folder name under the mount folder.")
+            } footer: {
+                Text("Also the folder name this remote is mounted in.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -99,21 +127,36 @@ private struct ConnectionDetail: View {
                 Toggle("Connect at login", isOn: $connectAtLogin)
                 Toggle("Read only", isOn: $readOnly)
                 TextField("Cache size limit", text: $cacheSize)
+            } footer: {
                 Text("""
-                     Files you write are cached locally and uploaded in the background, \
-                     which is what Finder and apps like Office expect. Turning the cache \
-                     off would make the volume read-only.
+                     Files you write are cached on this Mac and uploaded in the \
+                     background, which is what Finder and apps like Office expect.
                      """)
                 .font(.caption).foregroundStyle(.secondary)
             }
+
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Revert", action: load).disabled(!hasChanges)
+                    // Explicit rather than saving as you type: the name decides the
+                    // mount folder, so applying it halfway through being typed would
+                    // create directories nobody asked for.
+                    Button("Apply", action: save)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!hasChanges)
+                }
+            }
         }
-        .formStyle(.grouped)
         .onAppear(perform: load)
         .onChange(of: connection.id) { _, _ in load() }
-        .onDisappear(perform: save)
-        .toolbar {
-            Button("Apply", action: save)
-        }
+    }
+
+    private var hasChanges: Bool {
+        displayName != connection.displayName
+            || readOnly != connection.options.readOnly
+            || cacheSize != connection.options.vfsCacheMaxSize
+            || connectAtLogin != connection.connectAtLogin
     }
 
     private func load() {
