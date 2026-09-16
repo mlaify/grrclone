@@ -56,6 +56,16 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # The icon is generated rather than committed, so CI has to build it — which
+      # also means the generator itself is exercised on every run instead of only
+      # when someone happens to touch it locally.
+      - name: Generate the app icon
+        run: |
+          set -o pipefail
+          swift scripts/make-icon.swift
+          iconutil -c icns build/AppIcon.iconset -o App/grrclone/Resources/AppIcon.icns
+          test -s App/grrclone/Resources/AppIcon.icns
+
       # Unsigned: CI has no Developer ID certificate. Release signing is a separate,
       # tag-triggered workflow so that signing secrets never run on pull requests,
       # including ones from forks.
