@@ -133,9 +133,29 @@ Do not re-litigate these without new evidence. Reasoning is in
   so, not report success. See the session log for 2026-09-16 (fixes).
 
 - **Finder metadata is uploaded to the remote.** `.DS_Store` and AppleDouble `._`
-  sidecars created by Finder land on the storage provider. rclone's `--noappledouble`
-  is a FUSE mount option and does nothing for `serve nfs`, so this needs filtering on
-  our side. Cosmetic but untidy, and users notice.
+  sidecars created by Finder land on the storage provider.
+
+  Investigated 2026-09-16, and the obvious fixes are all ruled out:
+
+  - `--no-appledouble` and `--no-applexattr` are **`mount` (FUSE) flags**. They do not
+    exist on `rclone serve nfs`, so the transport grrclone uses cannot take them.
+  - `serve/start` does accept the filter block, but **`--exclude` does not stop writes
+    reaching the remote.** Tested directly: serving with `--exclude .DS_Store
+    --exclude "._*"`, then writing both through the mount, and both arrived at the
+    provider. Filters govern what rclone lists and reads, not what the VFS writes back.
+  - Deleting them from the remote on a schedule was considered and rejected. grrclone
+    deleting files it did not create is exactly the class of behaviour the mount
+    ownership rule exists to prevent.
+
+  What remains is a macOS-side setting, `DSDontWriteNetworkStores`, which stops Finder
+  writing `.DS_Store` to network volumes. It is **global** — it affects every network
+  volume, not just grrclone's — and needs a Finder restart, so it cannot simply be set
+  on the user's behalf. A Settings toggle that explains the trade-off is the likely
+  shape of the fix. It is also only half a fix: it does nothing about the `._` sidecars,
+  which macOS writes because NFS has no native extended-attribute support.
+
+  Unverified as of this note: whether that preference actually applies to a
+  loopback NFS mount under `$HOME`. Test before shipping a toggle that claims to work.
 
 ## Deferred, deliberately
 
