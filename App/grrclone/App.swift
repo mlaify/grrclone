@@ -51,6 +51,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before anything touches the mount registry or the daemon pid file. A second
+        // instance reaching DaemonSupervisor.start() reaps the first instance's rclone
+        // daemon, leaving its mounts backed by a dead server and hanging Finder.
+        guard SingleInstance.acquire() else {
+            NSApp.terminate(nil)
+            return
+        }
+
         // A test affordance, because this is otherwise unverifiable: the menu bar
         // popover closes the instant anything else takes focus, so UI automation
         // cannot reach the Settings button inside it. This opens the same code path

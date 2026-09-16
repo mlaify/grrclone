@@ -228,7 +228,15 @@ Recorded because each cost real time and each is easy to repeat.
    at an absolute `.keychain-db` path and use that one string everywhere. Note also
    that `notarytool submit` reads its stored profile from the *default* keychain unless
    told otherwise, so a throwaway keychain must be passed to every invocation.
-17. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
+17. **A second app instance is not harmless when instances share state.** Two copies
+   of grrclone both supervise a daemon recorded in one pid file, so the newcomer's
+   orphan cleanup reaps the running instance's daemon and strands its mounts. Any app
+   with a singleton resource needs an explicit guard; relying on Finder to activate an
+   existing copy does not hold across two different bundles.
+18. **`NSApp.sendAction` can return `true` and do nothing.** `showSettingsWindow:`
+   reported success while creating no window. A return value is not evidence; check
+   for the effect.
+19. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
    "Cannot install under Rosetta 2 in ARM default prefix". Prefix with `arch -arm64`.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
