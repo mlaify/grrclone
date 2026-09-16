@@ -127,3 +127,29 @@ Recorded because each cost real time and each is easy to repeat.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
    measurements read 3200 MB/s and meant nothing.
+
+## Session log
+
+Newest first. One entry per working session, recording what changed and what was
+learned, so the reasoning survives even when the code moves on.
+
+### 2026-09-16 — from empty directory to working app
+
+Started with an empty repository and a question: is a free, open-source Mountain Duck
+alternative feasible?
+
+- Surveyed the prior art and found a real gap. Nothing open source combines a native
+  menu bar app, no third-party drivers, signed builds and no phone-home.
+- Ran the performance gate before writing any app code. NFS passed, so the approach
+  held. Two first-draft design assumptions were wrong and were corrected before they
+  cost anything: `--nfs-cache-type symlink` cannot work on macOS, and `rclone nfsmount`
+  hardcodes mount options in a way that hangs Finder.
+- Built the core, the menu bar app and self-healing mounts.
+- Found and fixed eight defects along the way, listed under Hard-won lessons above.
+  The timeout bug was the most serious: the app hung outright, and the mechanism meant
+  to prevent hangs was itself the cause.
+- Published to a private repository with the standard community documents, sanitised
+  ahead of an eventual public release.
+
+Open at the end of the session: signing and notarisation, which needs a Developer ID
+Application certificate.
