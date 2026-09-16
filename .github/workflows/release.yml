@@ -24,6 +24,11 @@ jobs:
     # Signing secrets are exposed to this job, so pin it to an environment. That lets
     # required reviewers gate it, and keeps the secrets out of every other workflow.
     environment: release
+    env:
+      # An absolute path ending in .keychain-db. `security` creates exactly this file,
+      # and every tool — including notarytool, which resolves a bare name relative to
+      # the working directory — accepts it unchanged.
+      KEYCHAIN: ${{ github.workspace }}/grrclone-signing.keychain-db
 
     steps:
       # The dispatch input is validated before it reaches `ref:` or any shell. Only
@@ -78,9 +83,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "$CERTIFICATE_P12" | base64 --decode > /tmp/cert.p12
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security set-keychain-settings -lut 21600 build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           # macOS cannot read a PKCS#12 with a SHA-256 MAC, which is OpenSSL 3's
           # default, and reports it as a wrong password. Say so plainly rather than
           # letting someone chase a password that was never the problem.
@@ -94,13 +99,13 @@ jobs:
               exit 1 ;;
           esac
 
-          security import /tmp/cert.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" \
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
           # Without this, codesign blocks on a UI prompt that nobody can answer and the
           # job hangs until it times out.
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          security list-keychain -d user -s build.keychain
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
           rm -f /tmp/cert.p12
           security find-identity -v -p codesigning | grep "Developer ID Application"
 
@@ -114,7 +119,7 @@ jobs:
           echo "$API_KEY" | base64 --decode > /tmp/AuthKey.p8
           xcrun notarytool store-credentials AC_NOTARY \
             --key /tmp/AuthKey.p8 --key-id "$API_KEY_ID" --issuer "$API_ISSUER" \
-            --keychain build.keychain
+            --keychain "$KEYCHAIN"
           rm -f /tmp/AuthKey.p8
 
       # The same script used locally, so a release from CI and a release from a laptop
@@ -122,6 +127,9 @@ jobs:
       - name: Build, sign, notarise, staple
         env:
           GRRCLONE_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY_SHA1 }}
+          # notarytool looks in the default keychain for a stored profile; ours is in
+          # the throwaway one, so release.sh has to be told where to find it.
+          GRRCLONE_NOTARY_KEYCHAIN: ${{ env.KEYCHAIN }}
         run: scripts/release.sh
 
       - name: Verify as a downloaded file would be
@@ -156,4 +164,4 @@ jobs:
 
       - name: Remove the signing keychain
         if: always()
-        run: security delete-keychain build.keychain || true
+        run: security delete-keychain "$KEYCHAIN" || true
