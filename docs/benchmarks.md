@@ -70,8 +70,8 @@ be meaningless again.
 
 ## Hazard discovered: reconciliation must be scoped by ownership
 
-The host already runs a hand-rolled launchd agent (`~/.local/bin/rclone-mounts.sh`,
-`xyz.matthewd.rclone-mounts.plist`) mounting two remotes at `~/Cloud` and
+The host already runs a hand-rolled launchd agent (`a shell script under ~/.local/bin`,
+`a launchd plist`) mounting two remotes at `~/Cloud` and
 `~/CloudVaults` via `rclone nfsmount`. In `/sbin/mount` output these are
 indistinguishable from grrclone's own mounts: both are `localhost:/` NFS mounts owned
 by the same user.

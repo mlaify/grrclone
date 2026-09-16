@@ -12,8 +12,8 @@ final class MountSafetyTests: XCTestCase {
         // mounts and the user's own hand-rolled ones.
         let output = """
         /dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)
-        localhost:/ on /Users/mdavis/CloudVaults (nfs, nodev, nosuid, mounted by mdavis)
-        localhost:/ on /Users/mdavis/Cloud (nfs, nodev, nosuid, mounted by mdavis)
+        localhost:/ on /Users/example/CloudVaults (nfs, nodev, nosuid, mounted by example)
+        localhost:/ on /Users/example/Cloud (nfs, nodev, nosuid, mounted by example)
         map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)
         """
         let entries = SystemMounts.parse(output)
@@ -21,7 +21,7 @@ final class MountSafetyTests: XCTestCase {
 
         let nfs = entries.filter(\.isLoopbackNFS)
         XCTAssertEqual(nfs.map(\.mountPoint),
-                       ["/Users/mdavis/CloudVaults", "/Users/mdavis/Cloud"])
+                       ["/Users/example/CloudVaults", "/Users/example/Cloud"])
         XCTAssertEqual(entries[0].source, "/dev/disk3s1s1")
         XCTAssertEqual(entries[0].mountPoint, "/")
     }
@@ -29,10 +29,10 @@ final class MountSafetyTests: XCTestCase {
     func testParsesMountPointContainingSpaces() {
         // " on " appears inside the path, so a naive split on the first occurrence would
         // truncate the mount point and we would then fail to recognise a path we own.
-        let output = "localhost:/ on /Users/mdavis/My Files on Cloud (nfs, mounted by mdavis)"
+        let output = "localhost:/ on /Users/example/My Files on Cloud (nfs, mounted by example)"
         let entries = SystemMounts.parse(output)
         XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries[0].mountPoint, "/Users/mdavis/My Files on Cloud")
+        XCTAssertEqual(entries[0].mountPoint, "/Users/example/My Files on Cloud")
     }
 
     func testIgnoresMalformedLines() {
@@ -52,8 +52,8 @@ final class MountSafetyTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let registry = MountRegistry(fileURL: url)
-        let ours = "/Users/mdavis/grrclone/testvault"
-        let theirs = "/Users/mdavis/Cloud"
+        let ours = "/Users/example/grrclone/testvault"
+        let theirs = "/Users/example/Cloud"
 
         try await registry.record(.init(connectionID: UUID(), mountPoint: ours,
                                         transport: "nfs", serverID: "nfs-1",
@@ -71,7 +71,7 @@ final class MountSafetyTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let registry = MountRegistry(fileURL: url)
-        let path = "/Users/mdavis/grrclone/x"
+        let path = "/Users/example/grrclone/x"
         try await registry.record(.init(connectionID: UUID(), mountPoint: path,
                                         transport: "nfs", serverID: "s", port: 1, pid: 2))
         try await registry.forget(mountPoint: path)
@@ -84,7 +84,7 @@ final class MountSafetyTests: XCTestCase {
             .appendingPathComponent("grrclone-test-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let path = "/Users/mdavis/grrclone/persisted"
+        let path = "/Users/example/grrclone/persisted"
         let first = MountRegistry(fileURL: url)
         try await first.record(.init(connectionID: UUID(), mountPoint: path,
                                      transport: "nfs", serverID: "s", port: 1, pid: 2))
