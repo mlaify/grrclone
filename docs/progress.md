@@ -107,6 +107,10 @@ Do not re-litigate these without new evidence. Reasoning is in
 
 ## Known issues
 
+- **The Settings window layout is cramped.** The tab bar sits over the connection list
+  because the `TabView` wraps an `HSplitView`, and the traffic lights overlap the
+  sidebar. Functional, but it should be a `NavigationSplitView` or lose the split.
+
 - **Two Developer ID Application certificates exist**, issued six minutes apart and
   sharing a common name, so `codesign -s "<name>"` fails as ambiguous.
 

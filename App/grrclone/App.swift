@@ -40,7 +40,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// after termination is already under way.
     private var terminationAnswered = false
 
+    /// Reopening a menu bar app — double-clicking it in Finder, or opening it again
+    /// while it is already running — otherwise does nothing at all, which reads as the
+    /// app being broken. Showing Settings is the useful interpretation, and it is the
+    /// only window grrclone has.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows: Bool) -> Bool {
+        SettingsWindow.open()
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A test affordance, because this is otherwise unverifiable: the menu bar
+        // popover closes the instant anything else takes focus, so UI automation
+        // cannot reach the Settings button inside it. This opens the same code path
+        // without a click. Harmless in a shipped build — it does nothing unless the
+        // variable is set.
+        if ProcessInfo.processInfo.environment["GRRCLONE_OPEN_SETTINGS_AT_LAUNCH"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { SettingsWindow.open() }
+        }
         Task { @MainActor in
             await AppModel.shared.start()
             await AppModel.shared.connectLoginItems()

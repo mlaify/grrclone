@@ -3,7 +3,6 @@ import GrrCloneCore
 
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -135,7 +134,9 @@ struct MenuBarView: View {
 
     private var footer: some View {
         HStack {
-            Button("Settings…") { openSettings() }
+            // Not openSettings(): from an inactive accessory app that silently does
+            // nothing. See SettingsWindow.
+            Button("Settings…") { SettingsWindow.open() }
                 .buttonStyle(.plain)
             Spacer()
             Button("Check mounts") { model.checkHealthNow() }
