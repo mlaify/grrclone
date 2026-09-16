@@ -103,6 +103,10 @@ Do not re-litigate these without new evidence. Reasoning is in
 
 ## Known issues
 
+- **Quit safety is only as good as what it can observe.** Three defects here all had
+  the same shape and were fixed together: a check that cannot see a problem must say
+  so, not report success. See the session log for 2026-09-16 (fixes).
+
 - **Finder metadata is uploaded to the remote.** `.DS_Store` and AppleDouble `._`
   sidecars created by Finder land on the storage provider. rclone's `--noappledouble`
   is a FUSE mount option and does nothing for `serve nfs`, so this needs filtering on
@@ -153,9 +157,13 @@ Recorded because each cost real time and each is easy to repeat.
    `uploadsQueued` and `uploadsInProgress`; safety checks need the sum.
 10. **A multi-line boolean inside a SwiftUI ViewBuilder is misparsed** as a trailing
    closure. Hoist it into a computed property.
-11. **Verify that a check can fail, not just that it passes.** Three of four CI checks
+11. **A safety check must fail closed.** Three separate bugs in the quit path all read
+   "cannot tell" as "nothing wrong": a cached count two seconds stale, an unreachable
+   daemon returning an empty snapshot, and a watchdog shorter than the work it guarded.
+   Any of them silently skipped the protection. Model "unknown" as its own state.
+12. **Verify that a check can fail, not just that it passes.** Three of four CI checks
    were broken in ways that still reported success on a clean tree.
-12. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
+13. **The CodeQL tracer runs its job under Rosetta**, so `brew install` fails with
    "Cannot install under Rosetta 2 in ARM default prefix". Prefix with `arch -arm64`.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
@@ -165,6 +173,36 @@ Recorded because each cost real time and each is easy to repeat.
 
 Newest first. One entry per working session, recording what changed and what was
 learned, so the reasoning survives even when the code moves on.
+
+### 2026-09-16 (fixes) — quit safety made honest
+
+A code review of the quit path found three defects that were one mistake wearing three
+hats: each made the safety check report success when it simply could not tell.
+
+- The quit decision read a polled count up to two seconds stale, so a file copied in
+  Finder and followed straight by Cmd-Q looked like nothing pending, skipping both the
+  warning and the drain. rclone is now asked directly at quit, which required deferring
+  the terminate decision and replying `false` to cancel.
+- `activity()` returned an empty snapshot when the daemon was unreachable, which every
+  caller read as "nothing pending". A daemon that crashed holding queued uploads
+  reported all clear. `Activity` now tracks `unreachable` separately, and `isKnownIdle`
+  requires a positive answer from every connection.
+- The 150 s quit watchdog was shorter than a worst-case teardown (~350 s with two wedged
+  mounts), so it could fire between unmounting a volume and stopping the daemon — the
+  one state the teardown ordering exists to prevent. `shutdown` now enforces its own
+  deadline: when time runs out it leaves the remaining mounts up *and the daemon running
+  to serve them*, an orphan the next launch reaps, which is strictly safer than a live
+  mount with no server behind it.
+
+Two smaller ones from the same review: the activity poller had no cancellable handle and
+kept overwriting published state after shutdown, and `reply(toApplicationShouldTerminate:)`
+could be sent twice.
+
+The missing adversarial test now exists in both forms. `grrclonectl quit-safety-test`
+queues a 96 MB upload, kills the daemon under it, and asserts we report unknown rather
+than safe; unit tests cover the same semantics. Observed output after the fix:
+`pending=0 unknown=true isKnownIdle=false` — the pending count alone would still have
+said "safe".
 
 ### 2026-09-16 (later) — public, with CI
 

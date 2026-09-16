@@ -36,20 +36,20 @@ final class ActivityTests: XCTestCase {
         ])
         XCTAssertEqual(activity.pendingUploads, 6)
         XCTAssertEqual(activity.erroredFiles, 3)
-        XCTAssertFalse(activity.isIdle)
+        XCTAssertFalse(activity.isKnownIdle)
     }
 
     func testIdleWhenNothingPending() {
         let activity = ConnectionManager.Activity(perConnection: [
             UUID(): stats(errored: 0, bytes: 90_165, files: 28),
         ])
-        XCTAssertTrue(activity.isIdle, "cached files that are already uploaded are not pending")
+        XCTAssertTrue(activity.isKnownIdle, "cached files that are already uploaded are not pending")
         XCTAssertEqual(activity.pendingUploads, 0)
     }
 
     func testEmptyActivityIsIdle() {
         let activity = ConnectionManager.Activity()
-        XCTAssertTrue(activity.isIdle)
+        XCTAssertTrue(activity.isKnownIdle)
         XCTAssertEqual(activity.pendingUploads, 0)
         XCTAssertFalse(activity.outOfSpace)
     }
@@ -62,6 +62,73 @@ final class ActivityTests: XCTestCase {
             UUID(): stats(outOfSpace: true),
         ])
         XCTAssertTrue(activity.outOfSpace)
+    }
+}
+
+/// The adversarial case: the daemon dies while uploads are queued.
+///
+/// This is the failure the whole quit-safety feature exists to catch, and it is the one
+/// most likely to be reported wrongly, because a dead daemon answers nothing at all.
+/// An earlier version read that silence as zero pending and told the user everything was
+/// safely stored — reassurance at the exact moment it was least warranted.
+final class UnreachableDaemonTests: XCTestCase {
+
+    private let connection = UUID()
+
+    /// Silence must never read as "nothing pending".
+    func testUnreachableConnectionIsNotReportedAsIdle() {
+        let activity = ConnectionManager.Activity(unreachable: [connection])
+
+        XCTAssertFalse(activity.isKnownIdle,
+                       "a daemon that cannot be asked must never be reported as idle")
+        XCTAssertTrue(activity.hasUnknownState)
+        // Counting zero is correct — we genuinely know of no pending file. The point is
+        // that zero pending is not sufficient to conclude it is safe to quit.
+        XCTAssertEqual(activity.pendingUploads, 0)
+    }
+
+    /// The quit path branches on `isKnownIdle`. If that were `pendingUploads == 0`, a
+    /// dead daemon would skip the warning, skip the drain, and unmount immediately.
+    func testQuitWouldNotBeTreatedAsSafeWhenStateIsUnknown() {
+        let unknown = ConnectionManager.Activity(unreachable: [connection])
+        let genuinelyIdle = ConnectionManager.Activity(perConnection: [
+            connection: .init(uploadsQueued: 0, uploadsInProgress: 0, erroredFiles: 0,
+                              bytesUsed: 1024, cachedFiles: 3, outOfSpace: false),
+        ])
+
+        XCTAssertFalse(unknown.isKnownIdle)
+        XCTAssertTrue(genuinelyIdle.isKnownIdle)
+        XCTAssertEqual(unknown.pendingUploads, genuinelyIdle.pendingUploads,
+                       "both report zero pending; only isKnownIdle tells them apart")
+    }
+
+    /// A partial failure is still a failure. One silent connection is enough to make
+    /// the overall answer unknown, even when every other connection reports clean.
+    func testOneUnreachableConnectionPoisonsTheWholeSnapshot() {
+        let healthy = UUID()
+        let activity = ConnectionManager.Activity(
+            perConnection: [healthy: .init(uploadsQueued: 0, uploadsInProgress: 0,
+                                           erroredFiles: 0, bytesUsed: 0, cachedFiles: 0,
+                                           outOfSpace: false)],
+            unreachable: [connection])
+
+        XCTAssertFalse(activity.isKnownIdle)
+        XCTAssertTrue(activity.hasUnknownState)
+    }
+
+    /// Pending work and an unreachable peer can coexist, and the user should be told
+    /// about the larger problem rather than only the countable one.
+    func testPendingAndUnknownCoexist() {
+        let other = UUID()
+        let activity = ConnectionManager.Activity(
+            perConnection: [other: .init(uploadsQueued: 2, uploadsInProgress: 1,
+                                         erroredFiles: 0, bytesUsed: 0, cachedFiles: 0,
+                                         outOfSpace: false)],
+            unreachable: [connection])
+
+        XCTAssertEqual(activity.pendingUploads, 3)
+        XCTAssertTrue(activity.hasUnknownState)
+        XCTAssertFalse(activity.isKnownIdle)
     }
 }
 

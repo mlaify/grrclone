@@ -110,29 +110,87 @@ public actor ConnectionManager {
         try? fm.removeItem(atPath: path)
     }
 
-    /// Ordered teardown for app quit.
+    public struct ShutdownOutcome: Sendable, Equatable {
+        /// Uploads still outstanding, or whose state could not be determined.
+        public var strandedUploads: Int = 0
+        /// Mounts deliberately left up because the deadline ran out.
+        public var abandonedMounts: [String] = []
+        /// True when the daemon was left running, which happens only when mounts are
+        /// still up and killing it would hang Finder.
+        public var daemonLeftRunning: Bool = false
+
+        public init(strandedUploads: Int = 0, abandonedMounts: [String] = [],
+                    daemonLeftRunning: Bool = false) {
+            self.strandedUploads = strandedUploads
+            self.abandonedMounts = abandonedMounts
+            self.daemonLeftRunning = daemonLeftRunning
+        }
+
+        public var isClean: Bool {
+            strandedUploads == 0 && abandonedMounts.isEmpty && !daemonLeftRunning
+        }
+    }
+
+    /// Worst-case seconds a full teardown can take, so a caller can size its own
+    /// watchdog instead of guessing.
+    public func teardownBudget(drainTimeout: TimeInterval) -> TimeInterval {
+        drainTimeout + Double(active.count) * NFSTransport.unmountBudget + Self.daemonStopBudget
+    }
+
+    static let daemonStopBudget: TimeInterval = 5
+
+    /// Ordered teardown for app quit, bounded by a deadline it enforces itself.
     ///
-    /// Uploads drain first, then mounts come down, then the daemon. Each step is ordered
-    /// for a reason: quitting with writes still queued strands the only copy of a file in
-    /// a local cache, and killing rclone under a live NFS mount leaves the kernel talking
-    /// to a dead server, which hangs Finder.
+    /// Order is not interchangeable. Uploads drain first, because quitting with writes
+    /// still queued strands the only copy of a file in a local cache. Mounts come down
+    /// next. The daemon dies last, because killing rclone under a live NFS mount leaves
+    /// the kernel talking to a dead server and hangs Finder until the mount is forcibly
+    /// removed.
     ///
-    /// - Parameter drainTimeout: how long to wait for uploads. Pass 0 to skip waiting,
-    ///   for a user who has been told what is pending and chose to quit anyway.
-    /// - Returns: uploads still outstanding when the mounts came down. Non-zero means
-    ///   data was left only in the local cache.
+    /// The deadline is enforced here rather than by a watchdog in the caller. An
+    /// external timer that fires mid-teardown kills the process between unmounting and
+    /// stopping the daemon, which is the one state this ordering exists to avoid. When
+    /// time runs out, the remaining mounts are deliberately left up **and the daemon is
+    /// left running to serve them** — an orphan the next launch reaps and reconciles,
+    /// which is strictly safer than a live mount with no server behind it.
+    ///
+    /// - Parameter drainTimeout: seconds to wait for uploads. Pass 0 to skip waiting.
+    /// - Parameter deadline: total seconds for everything. Defaults to the full budget.
     @discardableResult
     public func shutdown(drainTimeout: TimeInterval = 0,
-                         onProgress: (@Sendable (Int) -> Void)? = nil) async -> Int {
-        var stranded = 0
+                         deadline: TimeInterval? = nil,
+                         onProgress: (@Sendable (Int) -> Void)? = nil) async -> ShutdownOutcome {
+        var outcome = ShutdownOutcome()
+        let limit = Date().addingTimeInterval(deadline ?? teardownBudget(drainTimeout: drainTimeout))
+
         if drainTimeout > 0 {
-            stranded = await drainUploads(timeout: drainTimeout, onProgress: onProgress)
+            let allowed = min(drainTimeout, max(0, limit.timeIntervalSinceNow))
+            outcome.strandedUploads = await drainUploads(timeout: allowed, onProgress: onProgress)
         }
+
         for id in active.keys {
-            try? await disconnect(id)
+            guard let mount = active[id] else { continue }
+            // Only start an unmount that can finish inside the deadline. Beginning one
+            // we cannot complete is what leaves the process to be killed mid-teardown.
+            guard limit.timeIntervalSinceNow >= NFSTransport.unmountBudget else {
+                outcome.abandonedMounts.append(mount.mountPoint.path)
+                continue
+            }
+            do {
+                try await disconnect(id)
+            } catch {
+                outcome.abandonedMounts.append(mount.mountPoint.path)
+            }
         }
-        await supervisor.stop()
-        return stranded
+
+        if outcome.abandonedMounts.isEmpty {
+            await supervisor.stop()
+        } else {
+            // Leaving the daemon up keeps those mounts working until the next launch
+            // reaps it. Stopping it now would wedge Finder on every abandoned path.
+            outcome.daemonLeftRunning = true
+        }
+        return outcome
     }
 
     // MARK: - Reconciliation
@@ -189,8 +247,17 @@ public actor ConnectionManager {
     public struct Activity: Sendable, Equatable {
         public var perConnection: [UUID: RcloneRCClient.VFSStats] = [:]
 
-        public init(perConnection: [UUID: RcloneRCClient.VFSStats] = [:]) {
+        /// Connections whose cache state could not be read — usually because the daemon
+        /// is gone. Tracked separately because "we could not ask" is not the same
+        /// answer as "nothing is pending", and conflating them makes a safety check
+        /// fail open: a daemon that crashed holding queued uploads would report all
+        /// clear precisely when it is least true.
+        public var unreachable: Set<UUID> = []
+
+        public init(perConnection: [UUID: RcloneRCClient.VFSStats] = [:],
+                    unreachable: Set<UUID> = []) {
             self.perConnection = perConnection
+            self.unreachable = unreachable
         }
 
         public var pendingUploads: Int {
@@ -202,16 +269,33 @@ public actor ConnectionManager {
         public var outOfSpace: Bool {
             perConnection.values.contains { $0.outOfSpace }
         }
-        public var isIdle: Bool { pendingUploads == 0 }
+
+        /// True only when every connection answered and none had work outstanding.
+        /// This is the one to test before deciding it is safe to quit.
+        public var isKnownIdle: Bool { unreachable.isEmpty && pendingUploads == 0 }
+
+        /// At least one connection could not be asked, so its state is unknown.
+        public var hasUnknownState: Bool { !unreachable.isEmpty }
     }
 
     /// Local cache state for every active connection.
+    ///
+    /// A connection that cannot be queried is recorded in `unreachable` rather than
+    /// omitted, so callers can tell silence apart from a confirmed zero.
     public func activity() async -> Activity {
         var activity = Activity()
-        guard let client = try? await supervisor.requireClient() else { return activity }
+        guard !active.isEmpty else { return activity }
+
+        guard let client = try? await supervisor.requireClient() else {
+            // The daemon is gone. Nothing can be known about any connection's cache.
+            activity.unreachable = Set(active.keys)
+            return activity
+        }
         for mount in active.values {
             if let stats = try? await client.vfsStats(fs: mount.connection.fsSpec) {
                 activity.perConnection[mount.connection.id] = stats
+            } else {
+                activity.unreachable.insert(mount.connection.id)
             }
         }
         return activity
@@ -231,12 +315,17 @@ public actor ConnectionManager {
                              onProgress: (@Sendable (Int) -> Void)? = nil) async -> Int {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let pending = await activity().pendingUploads
-            if pending == 0 { return 0 }
-            onProgress?(pending)
+            let snapshot = await activity()
+            // Only a positive confirmation ends the wait. If the daemon stopped
+            // answering we cannot conclude the uploads finished — they are just as
+            // likely stuck — so keep waiting until the deadline and report what is
+            // still outstanding.
+            if snapshot.isKnownIdle { return 0 }
+            onProgress?(max(snapshot.pendingUploads, snapshot.unreachable.count))
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
-        return await activity().pendingUploads
+        let final = await activity()
+        return max(final.pendingUploads, final.unreachable.count)
     }
 
     // MARK: - Health and recovery
