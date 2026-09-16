@@ -24,9 +24,20 @@ jobs:
           languages: swift
           queries: security-and-quality
 
-      # CodeQL's Swift support needs a real compile, and autobuild picks up the
-      # SwiftPM manifest without needing the generated Xcode project.
-      - uses: github/codeql-action/autobuild@v3
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # Built explicitly rather than with autobuild. Autobuild compiles the SwiftPM
+      # manifest, which covers Sources/ but not App/grrclone — those files belong only
+      # to the generated Xcode project, so the entire app layer would go unscanned.
+      - name: Build everything CodeQL should see
+        run: |
+          set -o pipefail
+          swift build
+          cd App && xcodegen generate && cd ..
+          xcodebuild -project App/grrclone.xcodeproj -scheme grrclone \
+            -configuration Debug -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build > /dev/null
 
       - uses: github/codeql-action/analyze@v3
         with:
