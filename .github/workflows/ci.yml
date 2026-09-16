@@ -66,6 +66,24 @@ jobs:
           iconutil -c icns build/AppIcon.iconset -o App/grrclone/Resources/AppIcon.icns
           test -s App/grrclone/Resources/AppIcon.icns
 
+      # Keyed on the pinned version inside the fetch script, so the cache is
+      # invalidated by bumping rclone and never by anything else.
+      - name: Cache the bundled rclone
+        id: rclone-cache
+        uses: actions/cache@v4
+        with:
+          path: App/grrclone/Resources/rclone
+          key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
+
+      # Fetched rather than stubbed. XcodeGen's optional:true keeps spec validation
+      # happy when the binary is absent, but the copy-resources phase still runs and
+      # xcodebuild fails with "lstat(.../rclone): No such file or directory". Fetching
+      # it also means CI builds the app that actually ships, and exercises the
+      # checksum verification on every cache miss.
+      - name: Fetch the bundled rclone
+        if: steps.rclone-cache.outputs.cache-hit != 'true'
+        run: scripts/fetch-rclone.sh
+
       # Unsigned: CI has no Developer ID certificate. Release signing is a separate,
       # tag-triggered workflow so that signing secrets never run on pull requests,
       # including ones from forks.
