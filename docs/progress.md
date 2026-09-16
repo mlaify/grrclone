@@ -110,9 +110,14 @@ Do not re-litigate these without new evidence. Reasoning is in
 ## Known issues
 
 - **Two Developer ID Application certificates are installed**, issued six minutes apart
-  and sharing a common name, so `codesign -s "<name>"` fails as ambiguous.
-  `scripts/sign-app.sh` works around it by signing with a certificate hash. Revoking
-  the spare at Apple and deleting it from Keychain Access would remove the need.
+  and sharing a common name, so `codesign -s "<name>"` fails as ambiguous. Signing is
+  pinned to the correct one by hash in `~/.config/grrclone-signing/identity`, so builds
+  are deterministic today. Still to do: revoke the spare
+  (serial `017FF9B649C90630`, sha1 `2152 67BB …`) at
+  <https://developer.apple.com/account/resources/certificates/list> to free the account
+  slot, then run `scripts/remove-spare-cert.sh` to clean up the keychain. Revoke first;
+  deleting the local key first removes the only way to recover from revoking the wrong
+  one.
 - **The Developer ID certificate expires 2027-02-01**, much sooner than the usual five
   years, which normally means it is capped by the membership renewal date. Worth
   confirming before relying on it for a release cycle.
