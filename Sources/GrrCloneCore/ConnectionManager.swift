@@ -167,6 +167,64 @@ public actor ConnectionManager {
         return report
     }
 
+    // MARK: - Health and recovery
+
+    public struct HealthReport: Sendable {
+        public var healthy: [UUID] = []
+        public var repaired: [UUID] = []
+        public var failed: [UUID: String] = [:]
+    }
+
+    /// Probe every active mount and repair the ones that have stopped responding.
+    ///
+    /// Called after the machine wakes and whenever the network path changes. Sleep can
+    /// leave a mount present in the kernel but unable to reach its server, in which case
+    /// Finder shows a folder that hangs on every access. Detecting that and remounting is
+    /// the difference between an app you trust on a laptop and one you restart daily.
+    @discardableResult
+    public func checkHealth(repair: Bool = true) async -> HealthReport {
+        var report = HealthReport()
+
+        for mount in active.values {
+            switch await MountHealth.probe(mount.mountPoint) {
+            case .healthy:
+                report.healthy.append(mount.connection.id)
+
+            case .unresponsive, .gone:
+                guard repair else {
+                    report.failed[mount.connection.id] = "not responding"
+                    continue
+                }
+                do {
+                    try await reconnect(mount)
+                    report.repaired.append(mount.connection.id)
+                } catch {
+                    report.failed[mount.connection.id] = error.localizedDescription
+                }
+            }
+        }
+        return report
+    }
+
+    /// Tear a broken mount fully down and build it again.
+    ///
+    /// The old server is stopped rather than reused. Its NFS handle namespace belongs to
+    /// a session the kernel has already lost track of, and reattaching to it is what
+    /// produces "Stale NFS file handle" on every path.
+    private func reconnect(_ mount: ActiveMount) async throws {
+        let transport = transports[mount.connection.transport] ?? NFSTransport()
+
+        try? await transport.unmount(at: mount.mountPoint)
+        if let client = try? await supervisor.requireClient() {
+            try? await client.stopServer(id: mount.serverID)
+        }
+        try? await registry.forget(mountPoint: mount.mountPoint.path)
+        active[mount.connection.id] = nil
+        Self.removeIfEmpty(mount.mountPoint.path)
+
+        _ = try await connect(mount.connection)
+    }
+
     /// Paths in the mount table that look like ours but are not recorded as owned.
     /// Reported for diagnostics only — never unmounted. On a machine where the user also
     /// runs rclone by hand, these are their mounts.

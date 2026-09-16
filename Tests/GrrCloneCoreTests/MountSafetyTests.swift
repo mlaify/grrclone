@@ -219,3 +219,37 @@ final class LiveMountTableTests: XCTestCase {
         XCTAssertEqual(root?.fileSystemType, "apfs")
     }
 }
+
+/// The liveness probe. Two subtle failure modes are covered here, both of which produced
+/// a "healthy" verdict for a mount whose server had just been killed.
+final class MountHealthTests: XCTestCase {
+
+    func testHealthyForALiveLocalPath() async {
+        let status = await MountHealth.probe(URL(fileURLWithPath: "/"))
+        XCTAssertEqual(status, .healthy)
+    }
+
+    func testGoneForAPathThatIsNotAMount() async {
+        let status = await MountHealth.probe(
+            URL(fileURLWithPath: "/definitely/not/mounted/\(UUID().uuidString)"))
+        XCTAssertEqual(status, .gone)
+    }
+
+    /// The probe must return well inside its deadline even on a healthy filesystem, since
+    /// it runs on every wake and network change.
+    func testProbeIsFast() async {
+        let started = Date()
+        _ = await MountHealth.probe(URL(fileURLWithPath: "/"), timeout: 5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
+    func testBackoffLadderClimbsAndSaturates() {
+        XCTAssertEqual(MountHealth.backoff(attempt: 0), 1)
+        XCTAssertEqual(MountHealth.backoff(attempt: 1), 5)
+        XCTAssertEqual(MountHealth.backoff(attempt: 2), 30)
+        XCTAssertEqual(MountHealth.backoff(attempt: 3), 300)
+        // Retrying a mount on a laptop that has been shut for hours must not spin.
+        XCTAssertEqual(MountHealth.backoff(attempt: 99), 300)
+        XCTAssertEqual(MountHealth.backoff(attempt: -1), 1)
+    }
+}

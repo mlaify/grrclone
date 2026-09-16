@@ -3,12 +3,12 @@ import Network
 
 /// Minimal HTTP/1.1 client speaking over a unix domain socket.
 ///
-/// grrclone binds rclone's remote-control API to a unix socket rather than a TCP port
-/// so that access is governed by filesystem permissions and nothing is reachable over
-/// the network, not even loopback. `URLSession` cannot address unix sockets, hence this.
+/// grrclone binds rclone's remote-control API to a unix socket rather than a TCP port so
+/// that access is governed by filesystem permissions and nothing is reachable over the
+/// network, not even loopback. `URLSession` cannot address unix sockets, hence this.
 ///
-/// Only what the rc API needs is implemented: POST with a JSON body, Basic auth, and
-/// responses delimited by `Content-Length`.
+/// Only what the rc API needs is implemented: POST with a JSON body, Basic auth, and a
+/// response delimited by connection close.
 public actor UnixSocketHTTP {
     public enum Failure: Error, LocalizedError {
         case connectionFailed(String)
@@ -18,7 +18,7 @@ public actor UnixSocketHTTP {
 
         public var errorDescription: String? {
             switch self {
-            case .connectionFailed(let d): return "Could not connect to the rclone control socket: \(d)"
+            case .connectionFailed(let d): return "Could not reach the rclone control socket: \(d)"
             case .timedOut: return "The rclone control socket did not respond in time."
             case .malformedResponse(let d): return "Malformed response from rclone: \(d)"
             case .http(let status, let body): return "rclone returned HTTP \(status): \(body)"
@@ -44,10 +44,26 @@ public actor UnixSocketHTTP {
 
     /// POST `body` to `path` and return the raw response body.
     public func post(path: String, body: Data) async throws -> Data {
-        let connection = try makeConnection()
-        defer { connection.cancel() }
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            throw Failure.connectionFailed("socket \(socketPath) does not exist")
+        }
 
-        try await withTimeout { try await Self.waitUntilReady(connection) }
+        let connection = NWConnection(to: .unix(path: socketPath), using: .tcp)
+        connection.start(queue: .global(qos: .userInitiated))
+
+        // One watchdog for the whole request. Cancelling the connection is what makes a
+        // timeout real here: it forces every pending state change and every outstanding
+        // send or receive callback to fire, which is the only way to unblock a connection
+        // stuck in `.waiting`. Nothing else can.
+        let watchdog = DispatchWorkItem { connection.cancel() }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout,
+                                                            execute: watchdog)
+        defer {
+            watchdog.cancel()
+            connection.cancel()
+        }
+
+        try await Self.waitUntilReady(connection)
 
         var head = "POST \(path) HTTP/1.1\r\n"
         head += "Host: localhost\r\n"
@@ -61,49 +77,40 @@ public actor UnixSocketHTTP {
         payload.append(body)
         let request = payload
 
-        try await withTimeout { try await Self.send(request, on: connection) }
-        let raw = try await withTimeout { try await Self.receiveAll(connection) }
+        try await Self.send(request, on: connection)
+        let raw = try await Self.receiveAll(connection)
         return try Self.parse(raw)
     }
 
     // MARK: - Connection
 
-    private func makeConnection() throws -> NWConnection {
-        guard FileManager.default.fileExists(atPath: socketPath) else {
-            throw Failure.connectionFailed("socket \(socketPath) does not exist")
-        }
-        let endpoint = NWEndpoint.unix(path: socketPath)
-        let connection = NWConnection(to: endpoint, using: .tcp)
-        connection.start(queue: .global(qos: .userInitiated))
-        return connection
-    }
-
-    private func withTimeout<T: Sendable>(
-        _ work: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await work() }
-            group.addTask { [timeout] in
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                throw Failure.timedOut
-            }
-            guard let first = try await group.next() else { throw Failure.timedOut }
-            group.cancelAll()
-            return first
-        }
-    }
-
     private static func waitUntilReady(_ connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let resumed = LockedFlag()
+            let gate = OneShot()
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    if resumed.testAndSet() { cont.resume() }
+                    if gate.claim() { cont.resume() }
+
                 case .failed(let error):
-                    if resumed.testAndSet() { cont.resume(throwing: Failure.connectionFailed(error.localizedDescription)) }
+                    if gate.claim() {
+                        cont.resume(throwing: Failure.connectionFailed(error.localizedDescription))
+                    }
+
+                case .waiting(let error):
+                    // For a unix socket, `.waiting` means the listener is not there.
+                    // NWConnection would retry forever; there is nothing to wait for, and
+                    // failing to handle this state is what previously leaked the
+                    // continuation and hung the caller past its deadline.
+                    if gate.claim() {
+                        cont.resume(throwing: Failure.connectionFailed(
+                            "rclone is not listening on the control socket (\(error.localizedDescription))"))
+                    }
+
                 case .cancelled:
-                    if resumed.testAndSet() { cont.resume(throwing: Failure.connectionFailed("cancelled")) }
+                    // Reached when the watchdog fires.
+                    if gate.claim() { cont.resume(throwing: Failure.timedOut) }
+
                 default:
                     break
                 }
@@ -113,24 +120,34 @@ public actor UnixSocketHTTP {
 
     private static func send(_ data: Data, on connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let gate = OneShot()
             connection.send(content: data, completion: .contentProcessed { error in
-                if let error { cont.resume(throwing: Failure.connectionFailed(error.localizedDescription)) }
-                else { cont.resume() }
+                guard gate.claim() else { return }
+                if let error {
+                    cont.resume(throwing: Failure.connectionFailed(error.localizedDescription))
+                } else {
+                    cont.resume()
+                }
             })
         }
     }
 
-    /// Read until the peer closes. We send `Connection: close`, so EOF delimits the body
-    /// and we never have to implement chunked transfer decoding.
+    /// Read until the peer closes. The request sends `Connection: close`, so EOF delimits
+    /// the body and chunked transfer decoding is never needed.
     private static func receiveAll(_ connection: NWConnection) async throws -> Data {
         var accumulated = Data()
         while true {
             let (chunk, isComplete) = try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<(Data?, Bool), Error>) in
+                let gate = OneShot()
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) {
                     data, _, isComplete, error in
-                    if let error { cont.resume(throwing: Failure.connectionFailed(error.localizedDescription)) }
-                    else { cont.resume(returning: (data, isComplete)) }
+                    guard gate.claim() else { return }
+                    if let error {
+                        cont.resume(throwing: Failure.connectionFailed(error.localizedDescription))
+                    } else {
+                        cont.resume(returning: (data, isComplete))
+                    }
                 }
             }
             if let chunk { accumulated.append(chunk) }
@@ -161,18 +178,5 @@ public actor UnixSocketHTTP {
             throw Failure.http(status: status, body: String(data: body, encoding: .utf8) ?? "")
         }
         return Data(body)
-    }
-}
-
-/// One-shot flag so a continuation is resumed exactly once from an NWConnection callback,
-/// which can fire more than once for the states we observe.
-private final class LockedFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fired = false
-    func testAndSet() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if fired { return false }
-        fired = true
-        return true
     }
 }

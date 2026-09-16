@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var foreignMounts: [String] = []
     @Published var lastError: String?
 
+    private let systemEvents = SystemEvents()
     private let store = ConnectionStore()
     private let registry = MountRegistry(fileURL: MountRegistry.defaultURL())
     private var manager: ConnectionManager?
@@ -65,6 +66,7 @@ final class AppModel: ObservableObject {
             daemonReady = true
             status = "Ready"
             await refresh()
+            startWatchingForBreakage()
         } catch {
             status = "rclone failed to start"
             lastError = error.localizedDescription
@@ -170,6 +172,47 @@ final class AppModel: ObservableObject {
     func shutdown() async {
         status = "Disconnecting"
         await manager?.shutdown()
+    }
+
+    /// Sleep and network changes break mounts without reporting an error anywhere: the
+    /// mount stays in the table but stops responding, and Finder hangs on it. Probe and
+    /// repair when either happens.
+    private func startWatchingForBreakage() {
+        systemEvents.start { [weak self] reason in
+            guard let self else { return }
+            self.status = "Checking mounts after \(reason)"
+            Task.detached { [manager] in
+                // Waking is not instantaneous; give the network a moment to settle
+                // before deciding a mount is broken.
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let report = await manager?.checkHealth() else { return }
+                await MainActor.run {
+                    if !report.repaired.isEmpty {
+                        self.status = "Reconnected \(report.repaired.count) mount(s)"
+                    } else if !report.failed.isEmpty {
+                        self.status = "\(report.failed.count) mount(s) need attention"
+                        self.lastError = report.failed.values.first
+                    } else {
+                        self.status = "Ready"
+                    }
+                }
+                await self.refresh()
+            }
+        }
+    }
+
+    /// Probe now, on demand, from the menu.
+    func checkHealthNow() {
+        status = "Checking mounts"
+        Task.detached { [manager] in
+            guard let report = await manager?.checkHealth() else { return }
+            await MainActor.run {
+                self.status = report.failed.isEmpty
+                    ? "All \(report.healthy.count + report.repaired.count) mount(s) healthy"
+                    : "\(report.failed.count) mount(s) need attention"
+            }
+            await self.refresh()
+        }
     }
 
     /// Connect everything marked "connect at login". Runs at launch, after

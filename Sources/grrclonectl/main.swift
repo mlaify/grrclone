@@ -15,6 +15,7 @@ func usage() -> Never {
       grrclonectl connect <remote> [name]     serve and mount a remote under ~/grrclone
       grrclonectl disconnect <name>           unmount and stop serving
       grrclonectl reconcile                   clean up orphans from an unclean shutdown
+      grrclonectl recovery-test <remote>      connect, kill the server, verify self-repair
       grrclonectl doctor                      check the environment
 
     Mounts land in ~/grrclone/<name>. Nothing outside grrclone's own records is ever
@@ -119,6 +120,63 @@ do {
         let foreign = await manager.foreignLookalikes()
         print("not ours:     \(foreign.isEmpty ? "none" : foreign.joined(separator: ", "))")
         await supervisor.stop()
+
+    case "recovery-test":
+        // Integration test for the path that matters most on a laptop: a mount whose
+        // server has died must be detected and rebuilt, not left hanging Finder.
+        guard arguments.count >= 2 else { usage() }
+        let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
+        let (manager, supervisor) = try makeManager()
+        let connection = Connection(remote: remote, displayName: "recovery-test")
+
+        print("1. connecting…")
+        let mount = try await manager.connect(connection)
+        print("   mounted at \(mount.mountPoint.path)")
+
+        print("2. probing while healthy…")
+        let before = await MountHealth.probe(mount.mountPoint)
+        print("   \(before)")
+        guard before == .healthy else {
+            print("   FAIL: a fresh mount should be healthy"); exit(1)
+        }
+
+        print("3. killing the rclone daemon out from under the mount…")
+        // By PID from our own record, never `pkill -f <pattern>`. A pattern broad enough
+        // to match the daemon also matches any shell whose command line merely mentions
+        // it — including the one running this test, which is exactly what happened the
+        // first time and killed the harness instead of the daemon.
+        let pidFile = DaemonPidFile(
+            url: DaemonPidFile.defaultURL(runtimeDirectory: DaemonSupervisor.defaultRuntimeDirectory()))
+        guard let record = pidFile.read() else {
+            print("   FAIL: no daemon pid on record"); exit(1)
+        }
+        print("   killing pid \(record.pid)")
+        kill(record.pid, SIGKILL)
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+
+        print("4. probing the broken mount (must not hang)…")
+        let start = Date()
+        let after = await MountHealth.probe(mount.mountPoint, timeout: 5)
+        print("   \(after) after \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
+
+        print("5. repairing…")
+        let report = await manager.checkHealth()
+        if !report.repaired.isEmpty {
+            print("   REPAIRED")
+        } else if !report.failed.isEmpty {
+            print("   FAILED: \(report.failed.values.joined(separator: "; "))")
+        } else {
+            print("   nothing to do — mount reported healthy")
+        }
+
+        print("6. verifying the repaired mount is usable…")
+        let final = await MountHealth.probe(mount.mountPoint)
+        print("   \(final)")
+
+        print("7. cleaning up…")
+        await manager.shutdown()
+        await supervisor.stop()
+        print(final == .healthy ? "RESULT: recovery works" : "RESULT: recovery FAILED")
 
     default:
         usage()

@@ -87,6 +87,10 @@ struct MenuBarView: View {
             Button("Settings…") { openSettings() }
                 .buttonStyle(.plain)
             Spacer()
+            Button("Check mounts") { model.checkHealthNow() }
+                .buttonStyle(.plain)
+                .help("Probe each mount and reconnect any that have stopped responding")
+            Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain)
         }

@@ -1,11 +1,14 @@
 import Foundation
+import RcloneRC
 
-/// Runs short-lived helper processes (`/sbin/mount`, `diskutil`) with a hard timeout.
+/// Runs short-lived helper processes (`/sbin/mount`, `diskutil`) with a real timeout.
 ///
-/// A timeout is mandatory rather than defensive: a `stat` or `mount` touching a wedged
-/// NFS mount can block indefinitely in the kernel, and any such call made on the main
-/// actor would beachball the app. Everything here is `async` and must stay off the main
-/// actor.
+/// The timeout is not defensive dressing. `mount` and `diskutil` can block for a long
+/// time against a wedged NFS mount, and a call that never returns on the main actor is
+/// exactly the beachball this project exists to avoid. Everything here is `async` and
+/// must stay off the main actor.
+///
+/// See `Deadline` for why the timeout is built on Dispatch rather than a task group.
 public enum Shell {
     public struct Result: Sendable {
         public let status: Int32
@@ -42,30 +45,30 @@ public enum Shell {
         do { try process.run() }
         catch { throw Failure.launchFailed(error.localizedDescription) }
 
-        // Drain concurrently with waiting. A process that fills a 64 KiB pipe buffer
-        // while we wait on exit would otherwise deadlock.
-        async let outData = readToEnd(outPipe)
-        async let errData = readToEnd(errPipe)
-
-        let exited = await withTaskGroup(of: Bool.self) { group -> Bool in
-            group.addTask {
-                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                    process.terminationHandler = { _ in cont.resume() }
-                }
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return false
-            }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
+        // Drain on their own threads. A process that fills a 64 KiB pipe buffer while we
+        // wait for it to exit would otherwise deadlock: it blocks writing, we block
+        // waiting, neither moves.
+        let outHandle = outPipe.fileHandleForReading
+        let errHandle = errPipe.fileHandleForReading
+        async let outData = Deadline.run(seconds: timeout + 5) {
+            (try? outHandle.readToEnd()) ?? Data()
         }
+        async let errData = Deadline.run(seconds: timeout + 5) {
+            (try? errHandle.readToEnd()) ?? Data()
+        }
+
+        let exited = await Deadline.run(seconds: timeout) {
+            // Blocks a Dispatch thread, which is abandonable. `terminationHandler` is
+            // deliberately not used: if the process has already exited by the time it is
+            // installed, it may never fire, leaving the caller suspended forever.
+            process.waitUntilExit()
+            return true
+        } ?? false
 
         guard exited else {
             process.terminate()
-            // SIGTERM can be ignored by a process blocked in an uninterruptible syscall.
+            // SIGTERM can be ignored by a process blocked in an uninterruptible syscall,
+            // which is precisely the case a timeout implies.
             try? await Task.sleep(nanoseconds: 500_000_000)
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             throw Failure.timedOut(command: "\(executable) \(arguments.joined(separator: " "))",
@@ -73,16 +76,7 @@ public enum Shell {
         }
 
         return Result(status: process.terminationStatus,
-                      stdout: String(data: await outData, encoding: .utf8) ?? "",
-                      stderr: String(data: await errData, encoding: .utf8) ?? "")
-    }
-
-    private static func readToEnd(_ pipe: Pipe) async -> Data {
-        await withCheckedContinuation { (cont: CheckedContinuation<Data, Never>) in
-            DispatchQueue.global(qos: .utility).async {
-                let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
-                cont.resume(returning: data)
-            }
-        }
+                      stdout: String(data: await outData ?? Data(), encoding: .utf8) ?? "",
+                      stderr: String(data: await errData ?? Data(), encoding: .utf8) ?? "")
     }
 }
