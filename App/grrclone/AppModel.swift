@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var daemonReady = false
     @Published private(set) var foreignMounts: [String] = []
     @Published var lastError: String?
+    @Published private(set) var activity = ConnectionManager.Activity()
 
     private let systemEvents = SystemEvents()
     private let store = ConnectionStore()
@@ -67,6 +68,7 @@ final class AppModel: ObservableObject {
             status = "Ready"
             await refresh()
             startWatchingForBreakage()
+            startPollingActivity()
         } catch {
             status = "rclone failed to start"
             lastError = error.localizedDescription
@@ -169,9 +171,15 @@ final class AppModel: ObservableObject {
     /// Ordered teardown, run before the app exits. Mounts come down before the daemon,
     /// because killing rclone under a live NFS mount leaves the kernel talking to a dead
     /// server and hangs Finder until the mount is forcibly removed.
-    func shutdown() async {
+    /// - Parameter drainTimeout: seconds to wait for uploads before unmounting. Zero
+    ///   skips the wait, for a user who was told what was pending and chose to quit.
+    @discardableResult
+    func shutdown(drainTimeout: TimeInterval = 0) async -> Int {
         status = "Disconnecting"
-        await manager?.shutdown()
+        let stranded = await manager?.shutdown(drainTimeout: drainTimeout) { pending in
+            Task { @MainActor in self.status = "Finishing uploads (\(pending) left)" }
+        }
+        return stranded ?? 0
     }
 
     /// Sleep and network changes break mounts without reporting an error anywhere: the
@@ -199,6 +207,36 @@ final class AppModel: ObservableObject {
                 await self.refresh()
             }
         }
+    }
+
+    /// Poll local cache state so pending uploads are visible, and so quitting can warn
+    /// about them. Two seconds is frequent enough to feel live without being noisy.
+    private func startPollingActivity() {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let manager = await MainActor.run { self.manager }
+                guard let manager else { return }
+                let snapshot = await manager.activity()
+                await MainActor.run { self.activity = snapshot }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    /// Uploads not yet stored at the provider. Non-zero means quitting now would strand
+    /// the only copy of a file in a local cache the user does not know about.
+    var pendingUploads: Int { activity.pendingUploads }
+
+    /// Wait for uploads to finish, reporting progress. Returns what is still outstanding.
+    func drainUploads(timeout: TimeInterval) async -> Int {
+        guard let manager else { return 0 }
+        status = "Finishing uploads"
+        let remaining = await manager.drainUploads(timeout: timeout) { pending in
+            Task { @MainActor in self.status = "Finishing uploads (\(pending) left)" }
+        }
+        status = remaining == 0 ? "Ready" : "\(remaining) upload(s) unfinished"
+        return remaining
     }
 
     /// Probe now, on demand, from the menu.

@@ -139,6 +139,50 @@ public actor RcloneRCClient {
         let result = try await call("vfs/queue", ["fs": .string(fs)])
         return result["queue"]?.arrayValue?.compactMap { $0["name"]?.stringValue } ?? []
     }
+
+    /// State of one connection's local write cache.
+    ///
+    /// This is the authoritative answer to "is it safe to quit?". With
+    /// `--vfs-cache-mode full` a write returns as soon as the bytes are on local disk, so
+    /// a file can look saved in Finder while nothing has reached the storage provider yet.
+    public struct VFSStats: Sendable, Equatable {
+        public let uploadsQueued: Int
+        public let uploadsInProgress: Int
+        public let erroredFiles: Int
+        public let bytesUsed: Int
+        public let cachedFiles: Int
+        public let outOfSpace: Bool
+
+        public init(uploadsQueued: Int, uploadsInProgress: Int, erroredFiles: Int,
+                    bytesUsed: Int, cachedFiles: Int, outOfSpace: Bool) {
+            self.uploadsQueued = uploadsQueued
+            self.uploadsInProgress = uploadsInProgress
+            self.erroredFiles = erroredFiles
+            self.bytesUsed = bytesUsed
+            self.cachedFiles = cachedFiles
+            self.outOfSpace = outOfSpace
+        }
+
+        /// Both matter. A file already uploading is no safer to quit on than one still
+        /// queued, and counting only the queue reports zero while bytes are in flight.
+        public var pendingUploads: Int { uploadsQueued + uploadsInProgress }
+        public var hasUnfinishedWork: Bool { pendingUploads > 0 }
+    }
+
+    /// `vfs/stats` rather than `vfs/queue`: the queue endpoint reports only items waiting
+    /// to start, so a file actively uploading shows an empty queue and the caller
+    /// concludes, wrongly, that everything is safely stored.
+    public func vfsStats(fs: String) async throws -> VFSStats {
+        let result = try await call("vfs/stats", ["fs": .string(fs)])
+        let cache = result["diskCache"]
+        return VFSStats(
+            uploadsQueued: cache?["uploadsQueued"]?.intValue ?? 0,
+            uploadsInProgress: cache?["uploadsInProgress"]?.intValue ?? 0,
+            erroredFiles: cache?["erroredFiles"]?.intValue ?? 0,
+            bytesUsed: cache?["bytesUsed"]?.intValue ?? 0,
+            cachedFiles: cache?["files"]?.intValue ?? 0,
+            outOfSpace: cache?["outOfSpace"]?.boolValue ?? false)
+    }
 }
 
 public enum RcloneRCError: Error, LocalizedError {

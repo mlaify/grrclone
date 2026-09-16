@@ -16,6 +16,7 @@ func usage() -> Never {
       grrclonectl disconnect <name>           unmount and stop serving
       grrclonectl reconcile                   clean up orphans from an unclean shutdown
       grrclonectl recovery-test <remote>      connect, kill the server, verify self-repair
+      grrclonectl drain-test <remote>         write a large file, verify uploads are tracked
       grrclonectl doctor                      check the environment
 
     Mounts land in ~/grrclone/<name>. Nothing outside grrclone's own records is ever
@@ -177,6 +178,44 @@ do {
         await manager.shutdown()
         await supervisor.stop()
         print(final == .healthy ? "RESULT: recovery works" : "RESULT: recovery FAILED")
+
+    case "drain-test":
+        // Verifies the quit-safety path: a write must be visible as pending until it has
+        // actually reached the provider, and shutdown must wait for it.
+        guard arguments.count >= 2 else { usage() }
+        let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
+        let (manager, _) = try makeManager()
+        let connection = Connection(remote: remote, displayName: "drain-test")
+
+        print("1. connecting…")
+        let mount = try await manager.connect(connection)
+
+        print("2. writing 64 MB through the mount…")
+        let payload = Data(repeating: 0x67, count: 64 * 1024 * 1024)
+        let target = mount.mountPoint.appendingPathComponent(".grrclone-drain-probe")
+        try payload.write(to: target)
+        print("   write() returned — this is the dangerous moment: Finder now shows the")
+        print("   file as saved, but it may exist only in the local cache.")
+
+        let immediately = await manager.activity()
+        print("3. pending uploads immediately after write: \(immediately.pendingUploads)")
+
+        print("4. draining…")
+        let started = Date()
+        let stranded = await manager.drainUploads(timeout: 180) { pending in
+            print("   \(pending) remaining…")
+        }
+        print("   drained in \(String(format: "%.1f", Date().timeIntervalSince(started)))s, "
+              + "stranded: \(stranded)")
+
+        print("5. cleaning up…")
+        try? FileManager.default.removeItem(at: target)
+        _ = await manager.drainUploads(timeout: 60)
+        await manager.shutdown()
+
+        print(stranded == 0 && immediately.pendingUploads > 0
+              ? "RESULT: pending uploads are tracked and drained correctly"
+              : "RESULT: CHECK — pending=\(immediately.pendingUploads) stranded=\(stranded)")
 
     default:
         usage()

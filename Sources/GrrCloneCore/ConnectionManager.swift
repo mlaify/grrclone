@@ -110,12 +110,29 @@ public actor ConnectionManager {
         try? fm.removeItem(atPath: path)
     }
 
-    /// Ordered teardown for app quit. Every mount comes down before the daemon does.
-    public func shutdown() async {
+    /// Ordered teardown for app quit.
+    ///
+    /// Uploads drain first, then mounts come down, then the daemon. Each step is ordered
+    /// for a reason: quitting with writes still queued strands the only copy of a file in
+    /// a local cache, and killing rclone under a live NFS mount leaves the kernel talking
+    /// to a dead server, which hangs Finder.
+    ///
+    /// - Parameter drainTimeout: how long to wait for uploads. Pass 0 to skip waiting,
+    ///   for a user who has been told what is pending and chose to quit anyway.
+    /// - Returns: uploads still outstanding when the mounts came down. Non-zero means
+    ///   data was left only in the local cache.
+    @discardableResult
+    public func shutdown(drainTimeout: TimeInterval = 0,
+                         onProgress: (@Sendable (Int) -> Void)? = nil) async -> Int {
+        var stranded = 0
+        if drainTimeout > 0 {
+            stranded = await drainUploads(timeout: drainTimeout, onProgress: onProgress)
+        }
         for id in active.keys {
             try? await disconnect(id)
         }
         await supervisor.stop()
+        return stranded
     }
 
     // MARK: - Reconciliation
@@ -165,6 +182,61 @@ public actor ConnectionManager {
             }
         }
         return report
+    }
+
+    // MARK: - Transfer activity
+
+    public struct Activity: Sendable, Equatable {
+        public var perConnection: [UUID: RcloneRCClient.VFSStats] = [:]
+
+        public init(perConnection: [UUID: RcloneRCClient.VFSStats] = [:]) {
+            self.perConnection = perConnection
+        }
+
+        public var pendingUploads: Int {
+            perConnection.values.reduce(0) { $0 + $1.pendingUploads }
+        }
+        public var erroredFiles: Int {
+            perConnection.values.reduce(0) { $0 + $1.erroredFiles }
+        }
+        public var outOfSpace: Bool {
+            perConnection.values.contains { $0.outOfSpace }
+        }
+        public var isIdle: Bool { pendingUploads == 0 }
+    }
+
+    /// Local cache state for every active connection.
+    public func activity() async -> Activity {
+        var activity = Activity()
+        guard let client = try? await supervisor.requireClient() else { return activity }
+        for mount in active.values {
+            if let stats = try? await client.vfsStats(fs: mount.connection.fsSpec) {
+                activity.perConnection[mount.connection.id] = stats
+            }
+        }
+        return activity
+    }
+
+    /// Wait for every pending upload to finish, up to `timeout`.
+    ///
+    /// This matters because `--vfs-cache-mode full` makes a write return as soon as the
+    /// bytes are on local disk. Finder shows the file as saved while nothing has reached
+    /// the storage provider. Unmounting and quitting at that moment leaves the only copy
+    /// in a local cache the user does not know exists.
+    ///
+    /// Returns the number of uploads still outstanding: 0 means everything is safely
+    /// stored.
+    @discardableResult
+    public func drainUploads(timeout: TimeInterval = 120,
+                             onProgress: (@Sendable (Int) -> Void)? = nil) async -> Int {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let pending = await activity().pendingUploads
+            if pending == 0 { return 0 }
+            onProgress?(pending)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return await activity().pendingUploads
     }
 
     // MARK: - Health and recovery

@@ -45,6 +45,21 @@ Watches for wake from sleep, network return and volume unmount, probes every mou
 rebuilds the ones that stopped responding. A mount whose server is killed is detected in
 5.3 s, torn down and rebuilt, and verifies healthy.
 
+### M3, part 2 — transfer visibility and quit safety (2026-09-16)
+
+Closes a data-safety gap. With `--vfs-cache-mode full` a write returns as soon as the
+bytes reach local disk, so Finder shows a file as saved while nothing has reached the
+provider. Quitting then strands the only copy in a cache the user does not know exists.
+
+Pending uploads are now polled from `vfs/stats`, shown in the menu, and reflected in the
+menu bar icon. Quitting with uploads outstanding asks rather than surprises, waits up to
+120 s, and says so if anything is still unfinished. Measured: a 64 MB write shows as
+pending immediately and drains in 9.6 s.
+
+`vfs/stats` rather than `vfs/queue` is deliberate. The queue endpoint lists only items
+waiting to *start*, so a file actively uploading shows an empty queue and the caller
+concludes, wrongly, that everything is stored.
+
 ## Next
 
 In rough priority order.
@@ -55,9 +70,7 @@ In rough priority order.
    generated.
 2. **Bundle a pinned rclone**, universal, re-signed with our own team ID, checksummed at
    build time.
-3. **Transfer queue window** from `core/stats` and `vfs/queue`, so pending uploads are
-   visible. Without it a user can quit with writes still queued and not know.
-4. **DMG and a GitHub Actions release workflow**, using the App Store Connect API key
+3. **DMG and a GitHub Actions release workflow**, using the App Store Connect API key
    for unattended notarisation.
 5. **Encrypted `rclone.conf` support** via `config/unlock`, password in Keychain.
 6. **Bandwidth limit** via `core/bwlimit`.
@@ -83,6 +96,13 @@ Do not re-litigate these without new evidence. Reasoning is in
 | Read `rclone.conf`, never write it | People depend on it from the command line |
 | One daemon, N servers | Unified stats and teardown. Tradeoff: a crash drops all mounts, handled by reconciliation |
 | Ownership from our registry only | A user's own mounts are indistinguishable in the mount table |
+
+## Known issues
+
+- **Finder metadata is uploaded to the remote.** `.DS_Store` and AppleDouble `._`
+  sidecars created by Finder land on the storage provider. rclone's `--noappledouble`
+  is a FUSE mount option and does nothing for `serve nfs`, so this needs filtering on
+  our side. Cosmetic but untidy, and users notice.
 
 ## Deferred, deliberately
 
@@ -124,6 +144,11 @@ Recorded because each cost real time and each is easy to repeat.
    rejected, and they fail the whole request.
 7. **A `MenuBarExtra` with the window style does not build its content until clicked.**
    Startup attached there never runs. It belongs in the app delegate.
+9. **`vfs/queue` does not mean "uploads pending".** It lists only items waiting to
+   start, so a file actively uploading shows an empty queue. `vfs/stats` reports both
+   `uploadsQueued` and `uploadsInProgress`; safety checks need the sum.
+10. **A multi-line boolean inside a SwiftUI ViewBuilder is misparsed** as a trailing
+   closure. Hoist it into a computed property.
 8. **Benchmark the cold path.** With `--vfs-cache-mode full`, a second read never
    touches the network and a write returns before the upload starts. The first
    measurements read 3200 MB/s and meant nothing.
