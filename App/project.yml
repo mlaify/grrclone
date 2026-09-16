@@ -1,0 +1,38 @@
+name: grrclone
+options:
+  bundleIdPrefix: org.mlaify
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  GrrClone:
+    path: ../
+
+targets:
+  grrclone:
+    type: application
+    platform: macOS
+    sources:
+      - path: grrclone
+    dependencies:
+      - package: GrrClone
+        product: GrrCloneCore
+      - package: GrrClone
+        product: RcloneRC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.mlaify.grrclone
+        PRODUCT_NAME: grrclone
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: grrclone/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: grrclone/Resources/grrclone.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_VERSION: "5.10"
+        COMBINE_HIDPI_IMAGES: YES
+        # Universal, so Intel Macs are supported. rclone must be lipo'd to match.
+        ARCHS: "$(ARCHS_STANDARD)"
+        # The app spawns a bundled rclone and shells /sbin/mount, neither of which the
+        # App Sandbox permits. Distribution is Developer ID, where sandboxing is optional.
+        ENABLE_APP_SANDBOX: NO

@@ -6,8 +6,13 @@ Think Mountain Duck, without the license key, the phone-home, or the kernel exte
 
 ## Status
 
-Early development. Milestone 0 (the performance gate) is complete and passed — see
-[docs/benchmarks.md](docs/benchmarks.md). The app itself is not yet usable.
+Early development, but the menu bar app runs and mounts remotes today.
+
+Working: automatic discovery of your rclone remotes, connect and disconnect from the
+menu bar, connect at login, per-connection settings, recovery from an unclean shutdown,
+and an ordered teardown on quit. Not yet done: signed and notarized builds, a transfer
+queue window, and an add-remote wizard. The performance gate is documented in
+[docs/benchmarks.md](docs/benchmarks.md).
 
 ## How it works
 
@@ -38,6 +43,17 @@ creation, and broken large-directory listings.
 ## License
 
 MIT
+
+## Building
+
+```bash
+scripts/build-app.sh          # needs: brew install xcodegen
+open build/Build/Products/Debug/grrclone.app
+```
+
+grrclone appears in the menu bar with no Dock icon. It finds the remotes already in your
+`rclone.conf` and lists them. It reads that file but never writes it, so your existing
+rclone setup keeps working unchanged.
 
 ## Trying the core
 

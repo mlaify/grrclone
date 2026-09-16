@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Sandbox off: the app must spawn the bundled rclone binary and invoke
+         /sbin/mount, neither of which an App Sandbox permits. This is why grrclone
+         ships via Developer ID rather than the App Store. -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- rclone reaches the user's storage providers. No other network use exists:
+         there is no telemetry, no analytics, and no update check unless enabled. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

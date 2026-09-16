@@ -6,3 +6,4 @@ DerivedData/
 App/grrclone/Resources/rclone
 build/
 bench-results/
+App/grrclone.xcodeproj
