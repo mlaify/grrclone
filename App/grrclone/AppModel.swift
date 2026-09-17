@@ -382,6 +382,28 @@ final class AppModel: ObservableObject {
 
     func dismissUncleanShutdown() { uncleanShutdown = nil }
 
+    // MARK: - Remotes
+
+    /// The backends rclone supports, asked of the daemon rather than listed here.
+    func availableProviders() async throws -> [RcloneRCClient.Provider] {
+        guard let supervisor else { return [] }
+        return try await supervisor.requireClient().providers()
+    }
+
+    /// Create a remote and pick it up straight away.
+    ///
+    /// grrclone otherwise only reads `rclone.conf` at startup, so a remote created
+    /// here would not appear until relaunch — which looks like the wizard failed.
+    func createRemote(name: String, type: String, parameters: [String: String]) async throws {
+        guard let supervisor else { return }
+        let client = try await supervisor.requireClient()
+        try await client.createRemote(name: name, type: type, parameters: parameters)
+
+        _ = try? await store.adoptNewRemotes(try await client.listRemotes())
+        await refresh()
+        status = "Added \(name)"
+    }
+
     // MARK: - Updates
 
     /// Ask GitHub whether a newer release exists.
