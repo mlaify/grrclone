@@ -77,21 +77,46 @@ working is deleted rather than retried at every launch.
 
 ## Next
 
-Tracked as [issues](https://github.com/mlaify/grrclone/issues), which are the unit of
-work; this list is the priority order and the reasoning lives in each issue.
+Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), which is
+the unit of work — but the backlog is recorded here too, so this file remains a
+complete account of the project without needing GitHub open.
 
-1. [#24](https://github.com/mlaify/grrclone/issues/24) — bandwidth limit via
-   `core/bwlimit`
-2. [#25](https://github.com/mlaify/grrclone/issues/25) — log viewer, so failures are
-   diagnosable without a terminal
-3. M4: [#26](https://github.com/mlaify/grrclone/issues/26) add-remote wizard,
-   [#27](https://github.com/mlaify/grrclone/issues/27) WebDAV/NetFS transport as an
-   option, [#28](https://github.com/mlaify/grrclone/issues/28) Homebrew cask,
-   [#29](https://github.com/mlaify/grrclone/issues/29) opt-in update checks
+In rough priority order.
 
-Known limitations that are not going to be fixed are filed too, so they can be pointed
-at rather than re-investigated: [#30](https://github.com/mlaify/grrclone/issues/30) on
-AppleDouble `._` sidecars.
+1. **Bandwidth limit** ([#24](https://github.com/mlaify/grrclone/issues/24)) via
+   `core/bwlimit`, which takes a rate such as `10M` or `off` and applies to the running
+   daemon immediately — no restart, no reconnect. One daemon serves every connection,
+   so a single global value is the natural fit; per-connection limits are not something
+   `core/bwlimit` can express.
+2. **Log viewer** ([#25](https://github.com/mlaify/grrclone/issues/25)), so a failed
+   mount can be diagnosed without a terminal. The daemon already logs to a pipe that
+   nothing surfaces. Care needed: log lines can carry remote paths and, at some levels,
+   credentials in URLs, so a "copy diagnostics" button is an easy way to break the
+   privacy promise by accident.
+3. **M4 — reach:**
+   - **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)),
+     generated from `config/providers` and never hand-written per backend: the current
+     build reports 1,147 options across all providers, so any hand-maintained form is
+     wrong the day rclone ships a new one. OAuth should use rclone's own browser flow.
+   - **WebDAV/NetFS transport as an option**
+     ([#27](https://github.com/mlaify/grrclone/issues/27)). `MountTransport` was built
+     as a seam for this. It lands in `/Volumes` with a real eject button and no
+     privileged helper, but macOS `webdavfs` stages whole files before upload and
+     degrades badly on large directories, so it is a choice to offer, not a default.
+   - **Homebrew cask** ([#28](https://github.com/mlaify/grrclone/issues/28)). Releases
+     are already signed and notarised, which Homebrew requires; what remains is the
+     cask definition and a release cadence worth pointing it at.
+   - **Opt-in update checks** ([#29](https://github.com/mlaify/grrclone/issues/29)).
+     Any updater has to keep the central promise: no network traffic the user did not
+     ask for. Sparkle with `SUEnableAutomaticChecks = false`, not started until the
+     preference is enabled, and the privacy documentation and `check-privacy.sh`
+     updated honestly rather than quietly weakened to let it pass. If that cannot be
+     done cleanly, shipping no updater is the better outcome — the Homebrew cask covers
+     much of the same need with no phone-home at all.
+
+Known limitations that will not be fixed are filed too, so they can be pointed at
+rather than re-investigated: [#30](https://github.com/mlaify/grrclone/issues/30),
+AppleDouble `._` sidecars, which NFSv3 makes unavoidable. See Known issues below.
 
 ## Settled decisions
 
