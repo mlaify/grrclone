@@ -165,6 +165,8 @@ large directories.
 
 ## More
 
+- [docs/migrating.md](docs/migrating.md) — moving from a hand-rolled launchd mount
+  without changing your paths
 - [docs/benchmarks.md](docs/benchmarks.md) — why NFS, the numbers, and the defects found
   along the way
 - [docs/progress.md](docs/progress.md) — what is done, what is next, decisions taken
