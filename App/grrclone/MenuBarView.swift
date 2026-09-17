@@ -24,6 +24,11 @@ struct MenuBarView: View {
                 Divider()
             }
 
+            if let report = model.uncleanShutdown {
+                uncleanShutdownNotice(report)
+                Divider()
+            }
+
             if model.rows.isEmpty {
                 empty
             } else {
@@ -101,6 +106,53 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain)
             .help("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// Tells the user the last session ended badly, and what that may have cost.
+    ///
+    /// Deliberately not a transient status line. Recovery from a crash is automatic —
+    /// orphaned daemons reaped, stale mounts cleared — and being quiet about that is
+    /// right. What is not right is being quiet when the crash may have taken the
+    /// user's own data with it, which is the case when something wrote into a
+    /// mountpoint while nothing was mounted on it. That write is on the local disk,
+    /// looks saved, and the next mount hides it.
+    private func uncleanShutdownNotice(_ report: UncleanShutdownReport) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: report.needsAttention
+                      ? "exclamationmark.triangle.fill" : "info.circle")
+                    .foregroundStyle(report.needsAttention ? .orange : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(report.needsAttention
+                         ? "grrclone did not shut down cleanly, and found local files"
+                         : "grrclone did not shut down cleanly")
+                        .font(.caption.weight(.medium))
+                    Text(report.needsAttention
+                         ? "Something wrote into \(report.shadowedPaths.count) "
+                           + "connection folder(s) while nothing was mounted there. "
+                           + "Those files are on this Mac and would be hidden by the "
+                           + "next connection."
+                         : "Mounts and the rclone process were cleaned up. Nothing "
+                           + "appears to have been lost.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack {
+                Spacer()
+                if report.needsAttention {
+                    Button("Move Files Aside") { model.recoverShadowedData() }
+                        .controlSize(.small)
+                        .help("Move the local files to a folder named “(recovered …)” "
+                              + "so the connection can mount without hiding them")
+                }
+                Button("Dismiss") { model.dismissUncleanShutdown() }
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

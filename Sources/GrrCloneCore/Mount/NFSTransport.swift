@@ -153,5 +153,38 @@ public struct NFSTransport: MountTransport {
         } else {
             try fm.createDirectory(at: url, withIntermediateDirectories: true)
         }
+
+        try? protectWhileUnmounted(url)
+    }
+
+    /// Make a mountpoint unwritable while nothing is mounted on it.
+    ///
+    /// An empty directory sitting where a volume used to be is a trap: anything
+    /// written there lands on the local disk, looks saved, and then disappears the
+    /// moment the mount comes back over the top of it. grrclone removes the directory
+    /// on a clean disconnect, so the exposure is after a crash or a force quit — which
+    /// is exactly when the user is least likely to notice.
+    ///
+    /// `0500` closes it, and costs nothing in either direction. Measured against a
+    /// real rclone NFS server:
+    ///
+    /// - a `touch` inside the empty directory fails with `Permission denied`
+    /// - mounting over it still succeeds and the remote lists normally
+    /// - writing *through* the mount works, because the mounted filesystem's
+    ///   permissions come from the server, not from the directory underneath
+    /// - unmounting reverts to the protected directory with no extra work
+    ///
+    /// Read and execute are kept so the path can still be inspected and so Finder can
+    /// show it; only writing is refused.
+    public static func protectWhileUnmounted(_ url: URL) throws {
+        try FileManager.default.setAttributes([.posixPermissions: 0o500],
+                                              ofItemAtPath: url.path)
+    }
+
+    /// Restore ordinary permissions, for a directory about to be removed or handed
+    /// back to the user.
+    public static func unprotect(_ url: URL) throws {
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: url.path)
     }
 }

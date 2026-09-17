@@ -27,6 +27,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var status: String = "Starting"
     @Published private(set) var daemonReady = false
     @Published private(set) var foreignMounts: [String] = []
+    /// Set when the previous session did not shut down cleanly. Stays until the user
+    /// dismisses it: a transient status line is the wrong shape for the one case
+    /// where their data may actually have been affected.
+    @Published private(set) var uncleanShutdown: UncleanShutdownReport?
     @Published var lastError: String?
     @Published private(set) var activity = ConnectionManager.Activity()
     /// True when the user's rclone config is encrypted, which enables the
@@ -95,6 +99,14 @@ final class AppModel: ObservableObject {
             // act on stale state.
             if let report = try? await manager.reconcileOrphans(), !report.cleaned.isEmpty {
                 status = "Recovered \(report.cleaned.count) mount(s) from a previous session"
+            }
+
+            // Reported rather than fixed silently. Recovery already happens — orphans
+            // reaped, stale mounts cleared — but an unclean shutdown is the one case
+            // where the user's own data may be involved, and they cannot check
+            // something nobody told them about.
+            if let previous = await supervisor.previousSession {
+                uncleanShutdown = UncleanShutdownReport.inspect(previous)
             }
 
             // An encrypted config fails here, not at daemon start: rclone starts
@@ -320,6 +332,25 @@ final class AppModel: ObservableObject {
             catch { lastError = error.localizedDescription }
         }
     }
+
+    /// Move data written into a mountpoint while nothing was mounted there.
+    ///
+    /// Moved, never merged: grrclone cannot know whether these files are newer than
+    /// what is on the server, and guessing wrong overwrites the wrong copy.
+    func recoverShadowedData() {
+        guard let report = uncleanShutdown else { return }
+        var recovered: [String] = []
+        for path in report.shadowedPaths {
+            do { recovered.append(try UncleanShutdownReport.recover(path: path).path) }
+            catch { lastError = "Could not move \(path): \(error.localizedDescription)" }
+        }
+        if !recovered.isEmpty {
+            status = "Moved local data aside from \(recovered.count) folder(s)"
+        }
+        uncleanShutdown = nil
+    }
+
+    func dismissUncleanShutdown() { uncleanShutdown = nil }
 
     /// Dismiss the error shown in the menu.
     func clearLastError() { lastError = nil }

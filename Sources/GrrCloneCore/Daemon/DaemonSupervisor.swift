@@ -38,6 +38,8 @@ public actor DaemonSupervisor {
     private var pipes: [Pipe] = []
     private var client: RcloneRCClient?
     private let pidFile: DaemonPidFile
+    /// Tracks whether this session ended properly. See `SessionMarker`.
+    public let session: SessionMarker
     private(set) public var socketPath: String?
 
     /// Recent daemon output. Also the thing that keeps rclone from blocking on a full
@@ -50,6 +52,7 @@ public actor DaemonSupervisor {
         let directory = runtimeDirectory ?? Self.defaultRuntimeDirectory()
         self.runtimeDirectory = directory
         self.pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: directory))
+        self.session = SessionMarker(url: SessionMarker.defaultURL(runtimeDirectory: directory))
     }
 
     public static func defaultRuntimeDirectory() -> URL {
@@ -101,6 +104,11 @@ public actor DaemonSupervisor {
         let fm = FileManager.default
         try fm.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true,
                                attributes: [.posixPermissions: 0o700])
+
+        // Read the previous session before starting a new one, or begin() overwrites
+        // the only evidence that the last shutdown was unclean.
+        previousSession = session.previousSession()
+        session.begin()
 
         // Reap a daemon left behind by an unclean shutdown before claiming the socket.
         // Skipping this would orphan it: we would delete the socket it is listening on,
@@ -198,6 +206,9 @@ public actor DaemonSupervisor {
     /// previous run did not shut down cleanly.
     private(set) public var reapedOrphanPID: Int32?
 
+    /// The previous session's record when it did not shut down cleanly, else nil.
+    private(set) public var previousSession: SessionMarker.Record?
+
     /// Stop the daemon. Callers must unmount everything first: killing rclone while an
     /// NFS mount it serves is still live leaves the kernel talking to a dead server,
     /// which hangs Finder until the mount is forcibly removed.
@@ -216,6 +227,9 @@ public actor DaemonSupervisor {
         pipes = []
         if let socketPath { try? FileManager.default.removeItem(atPath: socketPath) }
         pidFile.clear()
+        // Last on this path only: the marker's absence is what says the shutdown was
+        // clean, so nothing that can be interrupted may remove it.
+        session.clear()
         self.process = nil
         self.client = nil
         self.socketPath = nil

@@ -194,6 +194,31 @@ private struct ConnectionDetail: View {
             }
 
             Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("File locks are not shared between Macs")
+                            .font(.caption.weight(.medium))
+                        Text("Two Macs can open the same file at once and each "
+                             + "believe it has an exclusive lock. Take care with "
+                             + "anything that relies on locking — password databases, "
+                             + "encrypted vaults, Office documents — and avoid having "
+                             + "the same one open in two places.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                } icon: {
+                    Image(systemName: "lock.open.trianglebadge.exclamationmark")
+                        .foregroundStyle(.orange)
+                }
+            } footer: {
+                Text("A limitation of the protocol, not a setting. rclone's NFS "
+                     + "server runs no lock daemon, so grrclone satisfies locks "
+                     + "locally — without that, anything taking a lock would hang "
+                     + "forever instead.")
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 Toggle("Connect at login", isOn: $connectAtLogin)
                 Toggle("Read only", isOn: $readOnly)
                 TextField("Cache size limit", text: $cacheSize)
