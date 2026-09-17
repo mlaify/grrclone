@@ -3,12 +3,13 @@
 A running record of what is done, what is next, and which decisions are settled.
 Update this at the end of each working session.
 
-Last updated: 2026-09-16.
+Last updated: 2026-09-17.
 
 ## Where things stand
 
-The app runs and mounts remotes reliably. It is not yet distributable, because there is
-no signed build.
+**v0.1.0 is released.** Signed, notarised, stapled, and published as a DMG that
+Gatekeeper accepts on a machine that has never seen it. The maintainer runs it as his
+daily driver, having retired a hand-rolled launchd `nfsmount` agent for it.
 
 | Milestone | State |
 |---|---|
@@ -17,6 +18,7 @@ no signed build.
 | M2 — menu bar app | **Done.** Connects, disconnects, connects at login |
 | M3 — robustness and release | **Done.** Self-healing, quit safety, CI, and a notarised DMG |
 | M4 — reach | Not started |
+| v0.1.0 | **Released** 2026-09-17 |
 
 ## Done
 
@@ -64,25 +66,10 @@ concludes, wrongly, that everything is stored.
 
 In rough priority order.
 
-0. **Remove `code_scanning` from the branch ruleset.** CodeQL was dropped, so nothing
-   produces those results and the condition can never be satisfied. Until it is
-   removed, every pull request needs an admin override to merge. **Needs the
-   maintainer**, since org rulesets are not writable from here.
-1. **Notarisation.** Signing is done: `scripts/sign-app.sh` produces a valid
-   Developer ID signature with the hardened runtime, verified against a Release build.
-   Gatekeeper still rejects it, which is correct until a notarisation ticket exists.
-   **Needs the maintainer**: an App Store Connect API key (`.p8`) from
-   <https://appstoreconnect.apple.com/access/integrations/api>, then
-   `xcrun notarytool store-credentials AC_NOTARY …`. Blocks distribution entirely, and
-   Homebrew now requires notarisation. **Needs the maintainer**: the local certificate
-   is an Apple Development one, and a Developer ID Application certificate must be
-   generated.
-2. **Bundle a pinned rclone**, universal, re-signed with our own team ID, checksummed at
-   build time.
-5. **Encrypted `rclone.conf` support** via `config/unlock`, password in Keychain.
-6. **Bandwidth limit** via `core/bwlimit`.
-7. **Log viewer**, so failures are diagnosable without a terminal.
-8. M4: add-remote wizard generated from `config/providers`, the WebDAV/NetFS transport
+1. **Encrypted `rclone.conf` support** via `config/unlock`, password in Keychain.
+2. **Bandwidth limit** via `core/bwlimit`.
+3. **Log viewer**, so failures are diagnosable without a terminal.
+4. M4: add-remote wizard generated from `config/providers`, the WebDAV/NetFS transport
    exposed as an option, Homebrew cask, opt-in Sparkle updates.
 
 ## Settled decisions
@@ -92,6 +79,7 @@ Do not re-litigate these without new evidence. Reasoning is in
 
 | Decision | Why |
 |---|---|
+| Apple Silicon only, no universal binary | Intel Macs are on the way out; carrying a second slice buys nothing |
 | NFS over loopback, not macFUSE or FUSE-T | No kernel extension, no third-party install, no root |
 | `serve/start` plus our own `mount` call | `nfsmount` and `mount/mount` hardcode options, giving a hard mount that wedges Finder |
 | `soft,intr,timeo=600,retrans=2,nolocks,locallocks,nfc` | Turns a dead backend into an error in ~7 s instead of a hang |
@@ -245,6 +233,34 @@ Recorded because each cost real time and each is easy to repeat.
 
 Newest first. One entry per working session, recording what changed and what was
 learned, so the reasoning survives even when the code moves on.
+
+### 2026-09-17 — v0.1.0, and a real migration
+
+The release, and the change that made it worth having.
+
+- **Made the mount root configurable** (#20). It was hardcoded to `~/grrclone`, which
+  meant adopting grrclone was a migration rather than a swap: a machine already
+  mounting at `~/Cloud` and `~/CloudVaults` has docs, scripts and habit pointing at
+  those paths. Settings > General now exposes the folder, persisted under `MountRoot`.
+  Changing it deliberately does not move live mounts; disconnect and reconnect applies
+  it.
+- **Migrated the maintainer's machine off its launchd agent.** The old
+  `xyz.matthewd.rclone-mounts` plist was unloaded and parked as `.disabled-20260916`.
+  grrclone now serves both remotes at their original paths — verified by directory
+  listings, mount options (`soft intr locallocks nfc`) and a write that round-tripped
+  to the server. The old script, fixed to use serve+mount with safe options instead of
+  `nfsmount`, went into the `interserver` repo for machines not yet running grrclone.
+- **Tagged and released v0.1.0.** Verified against the downloaded artifact rather than
+  the green check: staple validates, `spctl` reports `Notarized Developer ID` for both
+  the DMG and the app, `codesign --verify --deep --strict` passes, and the bundled
+  rclone carries our team ID.
+- **Confirmed the release is Apple Silicon only, and that this is intended.**
+  Verification showed the app binary is `arm64` while the bundled rclone is universal.
+  Raised as a defect; the maintainer's decision is that Intel Macs are going away and
+  are not worth carrying, so it is now a settled scope decision rather than a gap.
+- **Cleared the CI debt.** Code scanning and the `code_scanning` ruleset condition are
+  both gone, so pull requests no longer need an admin override for a check nothing
+  produces. Two leftover local `probe` tags were deleted; they had never been pushed.
 
 ### 2026-09-16 (icon) — an angry cloud
 
