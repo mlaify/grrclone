@@ -9,6 +9,11 @@ struct MenuBarView: View {
             header
             Divider()
 
+            if let error = model.lastError {
+                errorNotice(error)
+                Divider()
+            }
+
             if model.rows.isEmpty {
                 empty
             } else {
@@ -37,6 +42,38 @@ struct MenuBarView: View {
             footer
         }
         .frame(width: 320)
+    }
+
+    /// Shows the last error, because until now nothing did.
+    ///
+    /// `lastError` was published and assigned from a dozen places — a daemon that
+    /// would not start, a password that could not be saved, a connection that failed —
+    /// and read by no view at all. Every one of those failures was silent: the app said
+    /// "Ready" and carried on, and the user found out later, if ever. A failure to save
+    /// a config password is the clearest case, since the only symptom is being asked
+    /// for it again at the next launch, long after the cause.
+    ///
+    /// Dismissible, so an error the user has read does not sit in the menu forever.
+    private func errorNotice(_ error: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(error)
+                .font(.caption)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            Button {
+                model.clearLastError()
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private var header: some View {
