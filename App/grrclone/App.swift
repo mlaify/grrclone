@@ -67,9 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["GRRCLONE_OPEN_SETTINGS_AT_LAUNCH"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { SettingsWindow.open() }
         }
+        // `start()` owns connecting the login items, because it is not the only path
+        // that reaches a usable state: unlocking an encrypted config after cancelling
+        // the prompt gets there too, and calling it from here as well would leave two
+        // owners of the same step.
         Task { @MainActor in
             await AppModel.shared.start()
-            await AppModel.shared.connectLoginItems()
         }
     }
 
