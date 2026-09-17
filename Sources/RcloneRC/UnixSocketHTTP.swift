@@ -157,8 +157,11 @@ public actor UnixSocketHTTP {
         }
     }
 
-    /// Read until the peer closes. The request sends `Connection: close`, so EOF delimits
-    /// the body and chunked transfer decoding is never needed.
+    /// Read until the peer closes.
+    ///
+    /// `Connection: close` means EOF delimits the response, which is why this can read
+    /// to completion without a Content-Length. It does **not** mean the body is
+    /// unencoded — see `parse`, which has to undo chunking.
     private static func receiveAll(_ connection: NWConnection) async throws -> Data {
         var accumulated = Data()
         while true {
@@ -181,6 +184,41 @@ public actor UnixSocketHTTP {
         return accumulated
     }
 
+    /// Strip HTTP chunked framing: a hex length, CRLF, that many bytes, CRLF, ending
+    /// with a zero-length chunk.
+    ///
+    /// Trailers after the final chunk are ignored; rclone does not send any, and a
+    /// reader that choked on them would be failing over something it does not need.
+    static func dechunk(_ body: Data) throws -> Data {
+        var out = Data()
+        var index = body.startIndex
+        let crlf = Data("\r\n".utf8)
+
+        while index < body.endIndex {
+            guard let lineEnd = body.range(of: crlf, in: index..<body.endIndex) else {
+                throw Failure.malformedResponse("chunk header with no terminator")
+            }
+            // A chunk size may carry extensions after a semicolon.
+            let header = String(data: body[index..<lineEnd.lowerBound], encoding: .utf8) ?? ""
+            let sizeText = header.split(separator: ";").first.map(String.init) ?? header
+            guard let size = Int(sizeText.trimmingCharacters(in: .whitespaces), radix: 16) else {
+                throw Failure.malformedResponse("unreadable chunk size: \(header)")
+            }
+            if size == 0 { break }
+
+            let start = lineEnd.upperBound
+            guard let end = body.index(start, offsetBy: size, limitedBy: body.endIndex),
+                  end <= body.endIndex else {
+                throw Failure.malformedResponse("chunk claims \(size) bytes, body is shorter")
+            }
+            out.append(body[start..<end])
+
+            // Skip the CRLF that follows the chunk data.
+            index = body.index(end, offsetBy: 2, limitedBy: body.endIndex) ?? body.endIndex
+        }
+        return out
+    }
+
     // MARK: - Parsing
 
     static func parse(_ raw: Data) throws -> Data {
@@ -189,7 +227,7 @@ public actor UnixSocketHTTP {
             throw Failure.malformedResponse("no header/body separator")
         }
         let headerData = raw[raw.startIndex..<range.lowerBound]
-        let body = raw[range.upperBound...]
+        var body = Data(raw[range.upperBound...])
 
         guard let headerText = String(data: headerData, encoding: .utf8),
               let statusLine = headerText.split(separator: "\r\n").first else {
@@ -199,6 +237,20 @@ public actor UnixSocketHTTP {
         guard parts.count >= 2, let status = Int(parts[1]) else {
             throw Failure.malformedResponse("bad status line: \(statusLine)")
         }
+        // Undo chunked transfer encoding.
+        //
+        // This was assumed unnecessary — `Connection: close` delimits the body, so a
+        // reader can just consume to EOF — and that reasoning is correct about *length*
+        // and silently wrong about *encoding*. rclone chunks large replies regardless:
+        // `config/providers` is 757 KB and arrives chunked, while every other call in
+        // this client is small enough to come back in one piece. So the add-remote
+        // wizard was the first thing to ever see it, and it saw hex chunk headers
+        // interleaved with its JSON and showed an empty list.
+        if headerText.range(of: "transfer-encoding: chunked",
+                            options: [.caseInsensitive]) != nil {
+            body = try Self.dechunk(body)
+        }
+
         guard (200..<300).contains(status) else {
             throw Failure.http(status: status, body: String(data: body, encoding: .utf8) ?? "")
         }

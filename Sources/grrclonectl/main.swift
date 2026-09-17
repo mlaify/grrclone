@@ -89,6 +89,14 @@ do {
         }
         await supervisor.stop()
 
+    case "providers":
+        let supervisor = try makeSupervisor()
+        let client = try await supervisor.start()
+        let provs = try await client.providers()
+        print("providers: \(provs.count)")
+        for p in provs.prefix(5) { print("  \(p.name)  \(p.description)  options=\(p.options.count)") }
+        await supervisor.stop()
+
     case "bwlimit":
         let supervisor = try makeSupervisor()
         let client = try await supervisor.start()
