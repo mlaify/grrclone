@@ -21,11 +21,31 @@ of the way, it asks for nothing, and it tells no one.
 
 ## Install
 
-Download the latest DMG from [Releases](https://github.com/mlaify/grrclone/releases),
-drag it to Applications, and open it. It is signed and notarised, so Gatekeeper opens
-it without argument.
+```bash
+brew install --cask mlaify/tap/grrclone
+```
+
+Or download the latest DMG from
+[Releases](https://github.com/mlaify/grrclone/releases) and drag it to Applications.
+Either way it is signed and notarised, so Gatekeeper opens it without argument.
 
 Apple Silicon only. Requires macOS 14 or later.
+
+<details>
+<summary>Why a tap rather than plain <code>brew install --cask grrclone</code></summary>
+
+homebrew-cask requires a project to be "notable" — 75 stars, or 30 forks, or 30
+watchers. grrclone has none of those yet, and Homebrew is one of the ways people
+would find it, so the requirement is circular for something new. The cask passes
+audit; only that rule fails. It will go to homebrew-cask unchanged once the bar is
+met.
+
+Homebrew owns installs: `brew upgrade --cask grrclone`. grrclone can be asked to
+*check* for new releases, but it never replaces its own bundle — two updaters owning
+one app is how a self-updating copy gets silently downgraded by the next upgrade.
+Release candidates are not served by the cask; they come from the releases page.
+
+</details>
 
 It appears in the menu bar with no Dock icon, finds the remotes already in your
 `rclone.conf`, and lists them.
@@ -38,11 +58,25 @@ It appears in the menu bar with no Dock icon, finds the remotes already in your
 
 Auto-discovers your rclone remotes, connects and disconnects them, reconnects at login,
 and repairs mounts after sleep or a network change. Per-connection settings for the
-mount name, read-only and cache size. Recovers from an unclean shutdown, and tears
-mounts down in the right order when you quit, so Finder never hangs on a dead server.
+mount name, read-only and cache size. Tears mounts down in the right order when you
+quit, so Finder never hangs on a dead server.
 
 Mounts land in a folder of your choosing — `~/grrclone` by default, and settable in
 Settings, so grrclone can take over the paths an existing setup already uses.
+
+**Encrypted `rclone.conf`.** If your config is encrypted, grrclone asks for the
+password and can remember it in your keychain.
+
+**A bandwidth limit**, applied to the running transfer immediately — no restart, no
+remounting.
+
+**A log viewer**, so a failed mount can be diagnosed without a terminal. Passwords and
+credentials in URLs are removed before anything is shown.
+
+**Survives a bad shutdown.** A folder with nothing mounted on it is left unwritable,
+so a crash cannot leave a directory that silently swallows files the next mount would
+hide. If it finds any, it says so and offers to move them somewhere safe rather than
+merging them anywhere.
 
 ## How it works, and why that matters
 
@@ -86,7 +120,9 @@ is visible.
 ## Privacy
 
 - No telemetry, no analytics, no crash reporting.
-- No update check unless you turn one on.
+- No update check unless you turn one on. When you do, grrclone asks GitHub which
+  releases exist and nothing else — no version, no machine details, no identifier —
+  and it never downloads or installs anything on its own.
 - No accounts, no licence keys, no gated features.
 - The only outbound connections are to the storage providers you configure.
 - The rclone control API is bound to a unix socket with `0600` permissions and random
