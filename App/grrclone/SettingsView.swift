@@ -80,6 +80,24 @@ struct SettingsView: View {
                      """)
                 .font(.caption).foregroundStyle(.secondary)
             }
+            if model.configIsEncrypted {
+                Section {
+                    LabeledContent("Configuration password") {
+                        HStack {
+                            Text(model.hasSavedConfigPassword ? "Saved in your keychain" : "Not saved")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if model.hasSavedConfigPassword {
+                                Button("Forget") { model.forgetConfigPassword() }
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("Your rclone configuration is encrypted. Forgetting the "
+                         + "password means grrclone asks for it the next time it starts.")
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 LabeledContent("Mount folder") {
                     HStack {

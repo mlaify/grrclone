@@ -126,6 +126,14 @@ public actor DaemonSupervisor {
             "--transfers", String(settings.transfers),
             "--checkers", String(settings.checkers),
             "--log-level", "NOTICE",
+            // Never prompt for the config password. An app has no terminal to prompt
+            // on, and left to try, rclone does not fail gracefully: the daemon starts,
+            // then the first call that reads an encrypted config panics with
+            // "Failed to read line: EOF", which says nothing about encryption. With
+            // this flag the same call reports "unable to decrypt configuration"
+            // instead, which grrclone recognises and answers by asking the user.
+            // See ConfigLock.swift.
+            "--ask-password=false",
         ]
         let errPipe = Pipe()
         process.standardError = errPipe
