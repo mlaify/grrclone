@@ -227,6 +227,9 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Dismiss the error shown in the menu.
+    func clearLastError() { lastError = nil }
+
     /// Forget a saved config password. Exposed in Settings so the choice to remember it
     /// is reversible without opening Keychain Access.
     func forgetConfigPassword() {
