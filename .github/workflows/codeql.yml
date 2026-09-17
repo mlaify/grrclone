@@ -97,11 +97,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # Fail loudly rather than build under Rosetta.
+          #
+          # This is where Rosetta showed up: CodeQL's tracer injects a dylib, and the
+          # first thing that ran under it dropped to x86_64. grrclone is Apple Silicon
+          # only by decision, and Rosetta is gone in macOS 28, so an analysis that
+          # quietly translated itself would be describing a build that will not exist.
+          # Checking both is deliberate: uname reports the process architecture, and
+          # sysctl.proc_translated is the only way to tell an arm64 process from one
+          # Rosetta is emulating.
+          ARCH="$(uname -m)"
+          TRANSLATED="$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)"
+          echo "architecture=$ARCH translated=$TRANSLATED"
+          if [ "$ARCH" != "arm64" ] || [ "$TRANSLATED" != "0" ]; then
+            echo "::error::refusing to analyse a translated or x86_64 build"
+            exit 1
+          fi
+
           swift build
           ( cd App && xcodegen generate >/dev/null )
           xcodebuild -project App/grrclone.xcodeproj -scheme grrclone \
             -configuration Debug -derivedDataPath build \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO build
+
+          # Prove it, rather than trusting the flag.
+          BIN=build/Build/Products/Debug/grrclone.app/Contents/MacOS/grrclone
+          echo "built slices: $(lipo -archs "$BIN")"
+          [ "$(lipo -archs "$BIN")" = "arm64" ] || {
+            echo "::error::expected an arm64-only binary"; exit 1; }
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
