@@ -37,7 +37,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.mlaify.grrclone
         PRODUCT_NAME: grrclone
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: grrclone/Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: grrclone/Resources/grrclone.entitlements
