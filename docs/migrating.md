@@ -4,8 +4,18 @@ If you already mount rclone remotes with a launchd agent and a shell script, grr
 can take over **without moving your mount points**. Your paths, your remotes and your
 `rclone.conf` stay as they are.
 
-This was written from doing it: the setup described here is a launchd agent running
-`rclone nfsmount` for two WebDAV remotes onto `~/Cloud` and `~/CloudVaults`.
+This was written from doing it. There are two setups it covers, and **the teardown
+differs**, so check which one you have before following anything below:
+
+| | How to tell | Teardown |
+|---|---|---|
+| **`nfsmount`** | the script calls `rclone nfsmount` | `launchctl unload`; `umount` may hang |
+| **serve + mount** | the script calls `rclone serve nfs` and `/sbin/mount` | `launchctl bootout`; unmount is clean |
+
+The second is what `interserver`'s `clients/macos/install.sh` installs, and it has an
+uninstaller — `clients/macos/uninstall.sh` — which does the whole teardown in the
+right order and checks for unfinished uploads first. **If you have that setup, run it
+and skip to step 3.**
 
 ## Before you start
 
@@ -23,13 +33,21 @@ setup is the right thing to keep.
 uploads them in the background, so a file you saved a minute ago may not be on the
 server yet. Unmounting takes the cache with it.
 
+Do not count files in the cache — in `full` mode it holds everything that has been
+*read* as well as everything waiting to be *written*, so it looks alarming when nothing
+is wrong. rclone records the answer itself: each cached file has a JSON companion with
+a `Dirty` flag, and `true` means the server has not got those changes yet.
+
 ```bash
-ls -la ~/Library/Caches/rclone/vfs/*/ 2>/dev/null
-tail -20 ~/Library/Logs/rclone/*.log
+# the interserver setup
+grep -rl '"Dirty": true' ~/Library/Caches/rclone-mounts/*/vfsMeta 2>/dev/null
+
+# the older nfsmount setup
+grep -rl '"Dirty": true' ~/Library/Caches/rclone/vfs/*/vfsMeta 2>/dev/null
 ```
 
-Look for recent `Copied` lines and an absence of anything in flight. If in doubt, leave
-the mounts up for a few minutes and look again.
+No output means everything written locally has reached the server. If there is output,
+leave the mounts up for a few minutes and look again.
 
 ## 1. Find what is actually there
 
@@ -48,10 +66,16 @@ migration.
 
 ## 2. Stop the old setup
 
-Unload the agent first, or launchd will restart the script the moment you unmount.
+Stop the agent first, or launchd will restart the script the moment you unmount —
+`KeepAlive` is set, with a fifteen second throttle.
+
+Which command depends on how it was loaded. `bootout` is right for anything installed
+with `bootstrap`, which is what the interserver installer uses; `unload` is the older
+form. Trying both is harmless:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/xyz.matthewd.rclone-mounts.plist
+launchctl bootout "gui/$(id -u)/xyz.matthewd.rclone-mounts" 2>/dev/null \
+  || launchctl unload ~/Library/LaunchAgents/xyz.matthewd.rclone-mounts.plist
 ```
 
 Move the plist aside rather than deleting it, so this is reversible:
@@ -68,13 +92,22 @@ Then unmount:
 umount ~/Cloud ~/CloudVaults
 ```
 
-If that hangs or reports "resource busy", the old setup is the reason: `rclone
-nfsmount` produces a **hard, non-interruptible** mount, so a wedged backend blocks
-`umount` indefinitely. Force it:
+If that hangs or reports "resource busy", you are on the `nfsmount` variant: it
+produces a **hard, non-interruptible** mount, so a wedged backend blocks `umount`
+indefinitely. The serve + mount variant already uses soft mounts and should unmount
+cleanly. Either way, force it:
 
 ```bash
 diskutil umount force ~/Cloud
 diskutil umount force ~/CloudVaults
+```
+
+Then stop the rclone servers — **after** the unmount, never before. Killing rclone
+while a mount it serves is still live leaves the kernel talking to a dead server, which
+is what wedges Finder.
+
+```bash
+pkill -f 'rclone serve nfs'
 ```
 
 Confirm nothing is left:
