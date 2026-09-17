@@ -264,14 +264,14 @@ final class ReconnectMountRootTests: XCTestCase {
 
     func testRootIsTheParentOfTheMountPoint() {
         let mountPoint = URL(fileURLWithPath: "/Users/someone/Cloud/dav1")
-        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint).path,
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint, displayName: "dav1").path,
                        "/Users/someone/Cloud")
     }
 
     /// The case that motivated the fix: a root that is not the default.
     func testACustomRootSurvivesARepair() {
         let mountPoint = URL(fileURLWithPath: "/Users/someone/CloudVaults/vaults")
-        let root = ConnectionManager.mountRoot(containing: mountPoint)
+        let root = ConnectionManager.mountRoot(containing: mountPoint, displayName: "vaults")
 
         XCTAssertNotEqual(root, ConnectionManager.defaultMountRoot())
         // Rebuilding from the derived root must land on the original path.
@@ -284,7 +284,8 @@ final class ReconnectMountRootTests: XCTestCase {
     func testHandlesARootThatIsTheHomeFolder() {
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
         let mountPoint = home.appendingPathComponent("Cloud", isDirectory: true)
-        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint).path, home.path)
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint, displayName: "Cloud").path,
+                       home.path)
     }
 
     /// Trailing slashes and unstandardised paths must not produce a different root,
@@ -292,7 +293,39 @@ final class ReconnectMountRootTests: XCTestCase {
     func testTrailingSlashesAndDotSegmentsDoNotChangeTheRoot() {
         let plain = URL(fileURLWithPath: "/Users/someone/Cloud/dav1")
         let awkward = URL(fileURLWithPath: "/Users/someone/Cloud/./dav1/")
-        XCTAssertEqual(ConnectionManager.mountRoot(containing: plain).path,
-                       ConnectionManager.mountRoot(containing: awkward).path)
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: plain, displayName: "dav1").path,
+                       ConnectionManager.mountRoot(containing: awkward, displayName: "dav1").path)
+    }
+
+    /// A name containing a separator mounts into nested directories, because
+    /// `prepareMountPoint` creates intermediates. Taking the parent would call
+    /// `<root>/team` the root, and a repair would then land at `<root>/team/team/docs`
+    /// — the drift this is meant to prevent, one level down.
+    func testAMultiComponentNameDoesNotShiftTheRoot() {
+        let mountPoint = URL(fileURLWithPath: "/Users/someone/Cloud/team/docs")
+        let root = ConnectionManager.mountRoot(containing: mountPoint, displayName: "team/docs")
+
+        XCTAssertEqual(root.path, "/Users/someone/Cloud")
+        XCTAssertEqual(root.appendingPathComponent("team/docs", isDirectory: true)
+                        .standardizedFileURL.path,
+                       mountPoint.standardizedFileURL.path,
+                       "rebuilding from the derived root must land on the original path")
+    }
+
+    /// Leading, trailing and doubled separators must not inflate the component count
+    /// and strip too much.
+    func testOddSeparatorsInANameDoNotStripTooManyComponents() {
+        let mountPoint = URL(fileURLWithPath: "/Users/someone/Cloud/team/docs")
+        XCTAssertEqual(
+            ConnectionManager.mountRoot(containing: mountPoint, displayName: "/team//docs/").path,
+            "/Users/someone/Cloud")
+    }
+
+    /// An empty name must not strip zero components and return the mount point itself,
+    /// which would nest one level deeper on every repair.
+    func testAnEmptyNameStillStripsOneComponent() {
+        let mountPoint = URL(fileURLWithPath: "/Users/someone/Cloud/dav1")
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint, displayName: "").path,
+                       "/Users/someone/Cloud")
     }
 }
