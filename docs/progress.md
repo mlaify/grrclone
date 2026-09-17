@@ -261,6 +261,38 @@ A new rule asserting updates are off by default silently never fired, because it
 written before being tested. All three rules were then checked by injecting the thing
 each forbids and watching them trip.
 
+### WebDAV/NetFS, built and rejected (2026-09-17)
+
+The second `MountTransport` implementation existed for one reason: volume semantics.
+NFS mounts land as directories; WebDAV through NetFS was supposed to land as a real
+volume with an eject button in the Finder sidebar.
+
+It was built, and it worked — a real remote mounted through grrclone's own stack, read
+and write, no privileged helper, no prompt. Then the justification was measured:
+
+| Mount | ejectable | removable | local | browsable |
+|---|---|---|---|---|
+| `~/Cloud` (NFS) | false | false | false | true |
+| `~/grrclone/VolTest` (WebDAV/NetFS) | false | false | false | true |
+| `/Volumes/EjectTest` (WebDAV/NetFS) | false | false | false | true |
+
+`volumeIsEjectable` is false in every case, including directly under `/Volumes`. Both
+transports already register as non-local browsable volumes. So the trade was slower
+transfers — `webdavfs` stages whole files and degrades on large directories — for no
+advantage anyone could demonstrate.
+
+Dropped, and [#27](https://github.com/mlaify/grrclone/issues/27) closed with the
+implementation notes, because the findings are the valuable part:
+
+- NetFS's option constants import into Swift as `String`, not `CFString`
+- `NetFSMountURLSync`'s mountpath is a **container**, not the mount point: it appends
+  the URL's last path component
+- `serve/start` rejects a nested `vfs` block; the nested form is `vfsOpt`, and flat
+  `vfs_cache_mode` keys are what works
+
+The honest cost: `MountTransport` still has one implementation, so the seam remains
+unproven. Better an unproven seam than a second implementation nobody should choose.
+
 ## Next
 
 Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), which is
@@ -275,21 +307,13 @@ complete account of the project without needing GitHub open.
    providers, so a hand-maintained version is wrong the day rclone ships a new one.
    OAuth should use rclone's own browser flow; `config/create` builds the remote.
 
-2. **WebDAV/NetFS transport as an option**
-   ([#27](https://github.com/mlaify/grrclone/issues/27)). `MountTransport` was built as
-   the seam for this and still has one implementation. Serving WebDAV and mounting with
-   `NetFSMountURLSync` and `kNetFSAllowLoopbackKey` lands in `/Volumes` with a real
-   eject button and no privileged helper. Known ceiling: macOS `webdavfs` stages whole
-   files before upload and degrades badly on large directories, so it is a choice to
-   offer with its tradeoffs stated, never a default.
-
-3. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28)).
+2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28)).
    Blocked on notability alone — 75 stars, or 30 forks, or 30 watchers. The cask passes
    `brew audit` otherwise; only that rule fails, which is circular for a project
    Homebrew would help people find. The tap covers it meanwhile and the same cask goes
    upstream unchanged when the bar is met.
 
-4. **Document the soft-mount tradeoff**
+3. **Document the soft-mount tradeoff**
    ([#42](https://github.com/mlaify/grrclone/issues/42)). Say plainly that `soft` trades
    a hang for an I/O error after roughly two minutes, and that `--vfs-cache-mode full`
    absorbs most of it because writes land in the local cache first. Documentation only;
@@ -318,6 +342,7 @@ Do not re-litigate these without new evidence. Reasoning is in
 
 | Decision | Why |
 |---|---|
+| NFS is the only transport | WebDAV/NetFS was built and measured: slower, and no volume advantage that survives checking |
 | Apple Silicon only, no universal binary | Intel Macs are on the way out; carrying a second slice buys nothing |
 | NFS over loopback, not macFUSE or FUSE-T | No kernel extension, no third-party install, no root |
 | `serve/start` plus our own `mount` call | `nfsmount` and `mount/mount` hardcode options, giving a hard mount that wedges Finder |
