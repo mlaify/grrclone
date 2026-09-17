@@ -77,12 +77,21 @@ working is deleted rather than retried at every launch.
 
 ## Next
 
-In rough priority order.
+Tracked as [issues](https://github.com/mlaify/grrclone/issues), which are the unit of
+work; this list is the priority order and the reasoning lives in each issue.
 
-1. **Bandwidth limit** via `core/bwlimit`.
-2. **Log viewer**, so failures are diagnosable without a terminal.
-3. M4: add-remote wizard generated from `config/providers`, the WebDAV/NetFS transport
-   exposed as an option, Homebrew cask, opt-in Sparkle updates.
+1. [#24](https://github.com/mlaify/grrclone/issues/24) — bandwidth limit via
+   `core/bwlimit`
+2. [#25](https://github.com/mlaify/grrclone/issues/25) — log viewer, so failures are
+   diagnosable without a terminal
+3. M4: [#26](https://github.com/mlaify/grrclone/issues/26) add-remote wizard,
+   [#27](https://github.com/mlaify/grrclone/issues/27) WebDAV/NetFS transport as an
+   option, [#28](https://github.com/mlaify/grrclone/issues/28) Homebrew cask,
+   [#29](https://github.com/mlaify/grrclone/issues/29) opt-in update checks
+
+Known limitations that are not going to be fixed are filed too, so they can be pointed
+at rather than re-investigated: [#30](https://github.com/mlaify/grrclone/issues/30) on
+AppleDouble `._` sidecars.
 
 ## Settled decisions
 
