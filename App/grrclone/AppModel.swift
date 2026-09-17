@@ -37,6 +37,13 @@ final class AppModel: ObservableObject {
     /// the prompt. Drives the "Unlock Configuration" item in the menu, so cancelling is
     /// recoverable without restarting the app.
     @Published private(set) var configLocked = false
+
+    /// The daemon-wide transfer limit, in rclone's own syntax. Empty means unlimited.
+    ///
+    /// Stored as what rclone reports rather than what was typed: `1M` comes back as
+    /// `1Mi`, so keeping the typed form would show a value the daemon is not using.
+    @Published private(set) var bandwidthLimit: String = ""
+    private static let bandwidthKey = "BandwidthLimit"
     private var configPasswordStore: ConfigPasswordStore?
 
     private var activityPoller: Task<Void, Never>?
@@ -206,6 +213,11 @@ final class AppModel: ObservableObject {
         guard !startupCompleted else { return }
         startupCompleted = true
 
+        // Reapply the saved limit. It lives in the daemon, not on disk, so a restart
+        // — including one caused by a crash — silently returns to unlimited unless it
+        // is set again here.
+        await applySavedBandwidthLimit()
+
         await connectLoginItems()
         startWatchingForBreakage()
         startPollingActivity()
@@ -224,6 +236,45 @@ final class AppModel: ObservableObject {
             await finishStartup()
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Bandwidth
+
+    /// Push the saved limit into a freshly started daemon.
+    private func applySavedBandwidthLimit() async {
+        let saved = UserDefaults.standard.string(forKey: Self.bandwidthKey) ?? ""
+        guard !saved.isEmpty, saved != "off" else {
+            bandwidthLimit = ""
+            return
+        }
+        do {
+            try await setBandwidthLimit(saved)
+        } catch {
+            // Worth saying out loud: the user set a limit and it is not in force.
+            lastError = "Could not apply the saved bandwidth limit: \(error.localizedDescription)"
+        }
+    }
+
+    /// Set the limit, and record what rclone actually applied.
+    ///
+    /// An invalid rate is rejected by rclone and the previous limit stays in force, so
+    /// a typo throttles nothing unexpectedly — but the user still has to be told, or
+    /// they will believe a limit is active that is not.
+    func setBandwidthLimit(_ rate: String) async throws {
+        guard let supervisor else { return }
+        let client = try await supervisor.requireClient()
+        let applied = try await client.setBandwidthLimit(rate)
+
+        bandwidthLimit = applied.isLimited ? applied.rate : ""
+        UserDefaults.standard.set(bandwidthLimit, forKey: Self.bandwidthKey)
+    }
+
+    /// Wrapper for the UI, which cannot throw.
+    func updateBandwidthLimit(_ rate: String) {
+        Task {
+            do { try await setBandwidthLimit(rate) }
+            catch { lastError = error.localizedDescription }
         }
     }
 

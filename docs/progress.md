@@ -75,6 +75,25 @@ into a legible `unable to decrypt configuration`, recognises it, and asks for th
 password. The password can be saved in the keychain, and a saved password that stops
 working is deleted rather than retried at every launch.
 
+### Bandwidth limit (2026-09-17)
+
+`core/bwlimit`, set from Settings and reapplied to the daemon at every start — the
+limit lives in the running process, so without that a crash or restart silently
+returns to unlimited.
+
+The documentation for that endpoint is wrong in two ways, both found by exercising it
+rather than reading it. A rate comes back in IEC units, so `1M` is reported as `1Mi`
+and anything comparing what was typed against what was applied sees a change that did
+not happen. And the documented example claims an `up:down` pair reports only the
+upload half; 1.75.1 returns the whole pair, so reading `bytesPerSecond` alone would
+have reported the download limit as equal to the upload one.
+
+Invalid input is rejected with the previous limit left in force, which is the right
+way round: a typo cannot accidentally unthrottle a connection.
+
+Also `grrclonectl bwlimit`, and rc errors are now readable — the raw JSON body used
+to be shown verbatim, which was tolerable in a log and is not in a menu.
+
 ## Next
 
 Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), which is
@@ -83,17 +102,12 @@ complete account of the project without needing GitHub open.
 
 In rough priority order.
 
-1. **Bandwidth limit** ([#24](https://github.com/mlaify/grrclone/issues/24)) via
-   `core/bwlimit`, which takes a rate such as `10M` or `off` and applies to the running
-   daemon immediately — no restart, no reconnect. One daemon serves every connection,
-   so a single global value is the natural fit; per-connection limits are not something
-   `core/bwlimit` can express.
-2. **Log viewer** ([#25](https://github.com/mlaify/grrclone/issues/25)), so a failed
+1. **Log viewer** ([#25](https://github.com/mlaify/grrclone/issues/25)), so a failed
    mount can be diagnosed without a terminal. The daemon already logs to a pipe that
    nothing surfaces. Care needed: log lines can carry remote paths and, at some levels,
    credentials in URLs, so a "copy diagnostics" button is an easy way to break the
    privacy promise by accident.
-3. **M4 — reach:**
+2. **M4 — reach:**
    - **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)),
      generated from `config/providers` and never hand-written per backend: the current
      build reports 1,147 options across all providers, so any hand-maintained form is
