@@ -31,6 +31,35 @@ final class AppModel: ObservableObject {
     /// dismisses it: a transient status line is the wrong shape for the one case
     /// where their data may actually have been affected.
     @Published private(set) var uncleanShutdown: UncleanShutdownReport?
+
+    // MARK: Updates
+
+    /// Off unless the user turns it on. grrclone promises no outbound connection
+    /// except to the storage they configured; an update check is an exception they
+    /// opt into, not one made on their behalf.
+    @Published var updateChecksEnabled: Bool = UserDefaults.standard.bool(forKey: "UpdateChecksEnabled") {
+        didSet {
+            UserDefaults.standard.set(updateChecksEnabled, forKey: "UpdateChecksEnabled")
+            if updateChecksEnabled { checkForUpdates() } else { availableUpdate = nil }
+        }
+    }
+    @Published var includePrereleases: Bool = UserDefaults.standard.bool(forKey: "UpdateIncludePrereleases") {
+        didSet {
+            UserDefaults.standard.set(includePrereleases, forKey: "UpdateIncludePrereleases")
+            if updateChecksEnabled { checkForUpdates() }
+        }
+    }
+    @Published private(set) var availableUpdate: AvailableUpdate?
+    @Published private(set) var lastUpdateCheck: Date?
+    @Published private(set) var updateCheckInProgress = false
+
+    /// How this copy was installed, which decides who may update it.
+    let installation = InstallationKind.detect()
+
+    var currentVersion: ReleaseVersion {
+        ReleaseVersion(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                       as? String ?? "0.0.0") ?? ReleaseVersion("0.0.0")!
+    }
     @Published var lastError: String?
     @Published private(set) var activity = ConnectionManager.Activity()
     /// True when the user's rclone config is encrypted, which enables the
@@ -236,6 +265,7 @@ final class AppModel: ObservableObject {
         await applySavedBandwidthLimit()
 
         await connectLoginItems()
+        if updateChecksEnabled { checkForUpdates() }
         startWatchingForBreakage()
         startPollingActivity()
     }
@@ -351,6 +381,40 @@ final class AppModel: ObservableObject {
     }
 
     func dismissUncleanShutdown() { uncleanShutdown = nil }
+
+    // MARK: - Updates
+
+    /// Ask GitHub whether a newer release exists.
+    ///
+    /// Checks only — nothing is downloaded or installed. Self-installing means
+    /// verifying a signature on a downloaded bundle and swapping a running app: a
+    /// large attack surface to add to a program that mounts your storage, and for
+    /// Homebrew users it is work Homebrew already does properly.
+    func checkForUpdates() {
+        guard !updateCheckInProgress else { return }
+        updateCheckInProgress = true
+
+        let current = currentVersion
+        let prereleases = includePrereleases
+        Task {
+            defer { updateCheckInProgress = false }
+            do {
+                availableUpdate = try await UpdateChecker()
+                    .check(current: current, includePrereleases: prereleases)
+                lastUpdateCheck = Date()
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Open the release page. Deliberately not "install" — see `checkForUpdates`.
+    func openReleasePage() {
+        guard let update = availableUpdate else { return }
+        NSWorkspace.shared.open(update.pageURL)
+    }
+
+    func dismissUpdate() { availableUpdate = nil }
 
     /// Dismiss the error shown in the menu.
     func clearLastError() { lastError = nil }

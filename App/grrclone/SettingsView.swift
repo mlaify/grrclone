@@ -14,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gear") }
             LogsTab(model: model)
                 .tabItem { Label("Logs", systemImage: "doc.plaintext") }
+            UpdatesTab(model: model)
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -470,5 +472,115 @@ private struct LogsTab: View {
             ticker?.invalidate()
             ticker = nil
         }
+    }
+}
+
+/// Update checking, and the awkward truth about Homebrew.
+///
+/// Two updaters cannot own one app bundle. Homebrew records the version it installed;
+/// an app that replaces itself makes that record a lie, and the next `brew upgrade`
+/// reinstalls over the top — downgrading anyone who had moved ahead. So when grrclone
+/// was installed by Homebrew it says so and points at `brew upgrade` rather than
+/// pretending it can manage itself.
+///
+/// Checking is still offered to Homebrew users, because knowing a release exists is
+/// useful and costs nothing; it is *installing* that has to have one owner.
+private struct UpdatesTab: View {
+    @ObservedObject var model: AppModel
+
+    private var isHomebrew: Bool { model.installation == .homebrew }
+
+    private var installedByNote: String {
+        guard isHomebrew else { return "" }
+        return "Homebrew manages this copy. Update it with `brew upgrade --cask "
+            + "grrclone`. grrclone will not replace its own bundle: two updaters "
+            + "fighting over one app is how you end up downgraded."
+    }
+
+    private var howToInstallNote: String {
+        isHomebrew ? "Run `brew upgrade --cask grrclone` to install it."
+                   : "Download it from the releases page."
+    }
+
+    private func availableText(_ update: AvailableUpdate) -> String {
+        let suffix = update.isPrerelease ? " (pre-release)" : ""
+        return "Version " + update.version.description + " is available" + suffix
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Installed version", value: model.currentVersion.description)
+                LabeledContent("Installed by") {
+                    Text(isHomebrew ? "Homebrew" : "Direct download")
+                        .foregroundStyle(.secondary)
+                }
+            } footer: {
+                // Always a Text, never a bare `if`: a conditional with no else
+                // makes the footer ambiguous and the compiler blames the enclosing
+                // Form. The strings live outside the view builder for the same
+                // family of reason — concatenation inside a ternary inside a
+                // ViewBuilder defeats the type checker outright.
+                Text(installedByNote).font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Check for new releases", isOn: $model.updateChecksEnabled)
+                Toggle("Include pre-releases", isOn: $model.includePrereleases)
+                    .disabled(!model.updateChecksEnabled)
+            } footer: {
+                Text("""
+                     Off by default. When on, grrclone asks GitHub which releases \
+                     exist — the only connection it ever makes that is not to your own \
+                     storage. It sends nothing about you or your remotes, and never \
+                     downloads or installs anything on its own.
+                     """)
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            if model.includePrereleases && isHomebrew {
+                Section {
+                    Label {
+                        Text("Homebrew installs stable releases only. A pre-release "
+                             + "has to be downloaded from the releases page, and doing "
+                             + "that replaces the copy Homebrew is tracking.")
+                        .font(.caption)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+
+            Section {
+                HStack {
+                    if model.updateCheckInProgress {
+                        ProgressView().controlSize(.small)
+                    } else if let update = model.availableUpdate {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(availableText(update))
+                                .font(.callout.weight(.medium))
+                            Text(howToInstallNote)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else if let checked = model.lastUpdateCheck {
+                        Text("Up to date, as of \(checked.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Not checked").font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if model.availableUpdate != nil {
+                        Button("Release Notes") { model.openReleasePage() }
+                    }
+                    Button("Check Now") { model.checkForUpdates() }
+                        .disabled(model.updateCheckInProgress)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
     }
 }
