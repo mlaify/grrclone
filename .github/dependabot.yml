@@ -1,0 +1,21 @@
+# Dependabot watches the only third-party dependencies this project has.
+#
+# Deliberately not the `swift` ecosystem: Package.swift declares no external
+# packages, only internal targets, so there would be nothing to update. The
+# bundled rclone is pinned by SHA256 in scripts/fetch-rclone.sh and updated by
+# hand, because a new rclone changes NFS behaviour and has to be benchmarked
+# rather than merged.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # One PR for all of them. These move together and each is a one-line SHA
+    # bump, so separate pull requests would be pure noise.
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies"]
