@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("Connections", systemImage: "externaldrive") }
             generalTab
                 .tabItem { Label("General", systemImage: "gear") }
+            LogsTab(model: model)
+                .tabItem { Label("Logs", systemImage: "doc.plaintext") }
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -359,6 +361,89 @@ private struct BandwidthLimitField: View {
                     if !editing { text = applied }
                 }
                 .onChange(of: text) { _, _ in editing = true }
+        }
+    }
+}
+
+/// Recent daemon output.
+///
+/// A tab rather than a window of its own. This app is an accessory with no main
+/// window, and presenting SwiftUI windows from one has already cost this project a
+/// day — see SettingsWindow. Settings is a window that already works.
+private struct LogsTab: View {
+    @ObservedObject var model: AppModel
+    @State private var ticker: Timer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker("Detail", selection: Binding(
+                    get: { model.logLevel },
+                    set: { model.setLogLevel($0) }
+                )) {
+                    ForEach(DaemonSettings.LogLevel.allCases, id: \.self) { level in
+                        Text(level.rawValue.capitalized).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+
+                Spacer()
+
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        model.logLines.map(\.text).joined(separator: "\n"), forType: .string)
+                }
+                .disabled(model.logLines.isEmpty)
+
+                Button("Clear") { model.clearLogs() }
+                    .disabled(model.logLines.isEmpty)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(model.logLines) { line in
+                            Text(line.text)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(line.id)
+                        }
+                    }
+                    .padding(6)
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .onChange(of: model.logLines.last?.id) { _, id in
+                    if let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
+                }
+            }
+
+            if model.logLines.isEmpty {
+                Text("Nothing logged yet. At Notice the daemon is quiet unless "
+                     + "something goes wrong; raise the detail to see more.")
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Text("Passwords and credentials in URLs are removed before anything is "
+                 + "shown here, but read what you copy before attaching it to a bug "
+                 + "report. Debug is loud and is not a level to leave switched on.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding()
+        // Polled only while this tab is visible: an app that is not showing logs has
+        // no reason to keep waking up to copy them.
+        .onAppear {
+            Task { await model.refreshLogs() }
+            ticker = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                Task { @MainActor in await model.refreshLogs() }
+            }
+        }
+        .onDisappear {
+            ticker?.invalidate()
+            ticker = nil
         }
     }
 }

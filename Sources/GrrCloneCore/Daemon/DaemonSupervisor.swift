@@ -35,9 +35,14 @@ public actor DaemonSupervisor {
     private let runtimeDirectory: URL
     private let settings: DaemonSettings
     private var process: Process?
+    private var pipes: [Pipe] = []
     private var client: RcloneRCClient?
     private let pidFile: DaemonPidFile
     private(set) public var socketPath: String?
+
+    /// Recent daemon output. Also the thing that keeps rclone from blocking on a full
+    /// pipe — see `DaemonLog`.
+    public let log = DaemonLog()
 
     public init(binary: URL, settings: DaemonSettings = .init(), runtimeDirectory: URL? = nil) {
         self.binary = binary
@@ -125,7 +130,7 @@ public actor DaemonSupervisor {
             "--cache-dir", settings.cacheDirectory.path,
             "--transfers", String(settings.transfers),
             "--checkers", String(settings.checkers),
-            "--log-level", "NOTICE",
+            "--log-level", settings.logLevel.rawValue,
             // Never prompt for the config password. An app has no terminal to prompt
             // on, and left to try, rclone does not fail gracefully: the daemon starts,
             // then the first call that reads an encrypted config panics with
@@ -135,9 +140,23 @@ public actor DaemonSupervisor {
             // See ConfigLock.swift.
             "--ask-password=false",
         ]
+        // Both streams are drained continuously into the log. This is not only so the
+        // output can be shown: a process writing to a pipe nobody reads blocks once
+        // that pipe fills, which would freeze the daemon and every mount it serves.
+        // See DaemonLog.
         let errPipe = Pipe()
+        let outPipe = Pipe()
         process.standardError = errPipe
-        process.standardOutput = Pipe()
+        process.standardOutput = outPipe
+
+        let log = self.log
+        for pipe in [errPipe, outPipe] {
+            pipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                Task { await log.append(data) }
+            }
+        }
 
         do { try process.run() }
         catch { throw Failure.didNotStart(error.localizedDescription) }
@@ -145,12 +164,16 @@ public actor DaemonSupervisor {
         self.process = process
 
         guard await Self.waitForSocket(socket, process: process, timeout: 10) else {
-            let detail = String(data: (try? errPipe.fileHandleForReading.readToEnd()) ?? Data(),
-                                encoding: .utf8) ?? ""
+            // Read the reason from the log rather than the pipe. The handler above
+            // already owns the pipe, and draining it here as well would race it for
+            // the very bytes that explain the failure.
+            let detail = await log.recent.suffix(10).map(\.text).joined(separator: "\n")
+            Self.stopDraining([errPipe, outPipe])
             process.terminate()
             self.process = nil
             throw Failure.didNotStart(detail.isEmpty ? "control socket never appeared" : detail)
         }
+        self.pipes = [errPipe, outPipe]
         // The socket inherits the directory's protection, but set it explicitly so the
         // guarantee does not depend on the umask in effect at launch.
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: socket)
@@ -189,6 +212,8 @@ public actor DaemonSupervisor {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
+        Self.stopDraining(pipes)
+        pipes = []
         if let socketPath { try? FileManager.default.removeItem(atPath: socketPath) }
         pidFile.clear()
         self.process = nil
@@ -197,6 +222,13 @@ public actor DaemonSupervisor {
     }
 
     // MARK: - Helpers
+
+    /// Detach the readability handlers. Left attached they keep firing against a
+    /// closed descriptor and hold the closure — and the log — alive after the daemon
+    /// has gone.
+    private static func stopDraining(_ pipes: [Pipe]) {
+        for pipe in pipes { pipe.fileHandleForReading.readabilityHandler = nil }
+    }
 
     private static func randomToken() -> String {
         var bytes = [UInt8](repeating: 0, count: 24)

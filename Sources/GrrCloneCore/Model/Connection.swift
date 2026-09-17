@@ -82,14 +82,32 @@ public struct MountOptions: Codable, Sendable, Equatable {
 /// Process-wide rclone settings. These are command-line flags on the daemon because
 /// rclone treats them as global, not per-server.
 public struct DaemonSettings: Codable, Sendable, Equatable {
+    /// How much the daemon says.
+    ///
+    /// `NOTICE` is the default because a quiet log is a readable one, and rclone at
+    /// `INFO` narrates every file operation. `DEBUG` exists for diagnosing a specific
+    /// failure and is not somewhere to leave a machine: it is loud, and it is the
+    /// level at which rclone prints request detail that can include credentials.
+    /// `DaemonLog` redacts what it recognises, but the less that is written the less
+    /// there is to get wrong.
+    public enum LogLevel: String, Codable, Sendable, CaseIterable {
+        case error = "ERROR"
+        case notice = "NOTICE"
+        case info = "INFO"
+        case debug = "DEBUG"
+    }
+
+    public var logLevel: LogLevel
     public var transfers: Int
     public var checkers: Int
     /// Root for rclone's own caches. rclone namespaces per remote beneath this itself.
     public var cacheDirectory: URL
 
-    public init(transfers: Int = 8, checkers: Int = 16, cacheDirectory: URL? = nil) {
+    public init(transfers: Int = 8, checkers: Int = 16, cacheDirectory: URL? = nil,
+                logLevel: LogLevel = .notice) {
         self.transfers = transfers
         self.checkers = checkers
+        self.logLevel = logLevel
         self.cacheDirectory = cacheDirectory ?? FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("org.mlaify.grrclone", isDirectory: true)
