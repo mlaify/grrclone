@@ -36,8 +36,7 @@ cask "grrclone" do
   version "$VERSION"
   sha256 "$SHA"
 
-  url "https://github.com/mlaify/grrclone/releases/download/v#{version}/grrclone.dmg",
-      verified: "github.com/mlaify/grrclone/"
+  url "https://github.com/mlaify/grrclone/releases/download/v#{version}/grrclone.dmg"
   name "grrclone"
   desc "Menu bar app that mounts rclone remotes as Finder volumes"
   homepage "https://github.com/mlaify/grrclone"
@@ -49,7 +48,7 @@ cask "grrclone" do
 
   # Apple Silicon only, by decision — see docs/progress.md.
   depends_on arch: :arm64
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "grrclone.app"
 
