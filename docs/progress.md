@@ -7,9 +7,20 @@ Last updated: 2026-09-17.
 
 ## Where things stand
 
-**v0.1.0 is released.** Signed, notarised, stapled, and published as a DMG that
-Gatekeeper accepts on a machine that has never seen it. The maintainer runs it as his
-daily driver, having retired a hand-rolled launchd `nfsmount` agent for it.
+**v0.2.0 is released**, and installable two ways:
+
+```bash
+brew install --cask mlaify/tap/grrclone
+```
+
+or the DMG from [Releases](https://github.com/mlaify/grrclone/releases). Both are
+signed, notarised and stapled; Gatekeeper accepts them on a machine that has never
+seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
+`nfsmount` agent for it.
+
+113 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+runs on main and weekly, and covers the app target as well as the packages — which it
+did not before, and which was proved rather than assumed.
 
 | Milestone | State |
 |---|---|
@@ -17,8 +28,33 @@ daily driver, having retired a hand-rolled launchd `nfsmount` agent for it.
 | M1 — headless core | **Done.** Verified end to end against real remotes |
 | M2 — menu bar app | **Done.** Connects, disconnects, connects at login |
 | M3 — robustness and release | **Done.** Self-healing, quit safety, CI, and a notarised DMG |
-| M4 — reach | Not started |
+| M4 — reach | Started. Homebrew distribution done; add-remote wizard and WebDAV transport open |
 | v0.1.0 | **Released** 2026-09-17 |
+| v0.2.0 | **Released** 2026-09-17 |
+
+## Releases
+
+### v0.2.0 — 2026-09-17
+
+Added: encrypted `rclone.conf` support, with the password optionally in the keychain;
+a configurable mount folder; a daemon-wide bandwidth limit applied without a restart;
+a log viewer with the detail level changeable while running; opt-in update checks with
+a pre-release channel.
+
+Fixed: the menu drew its connection rows behind the footer, so the list of mounts was
+the one thing you could not see; errors were published to a property no view read, so
+every failure was silent; self-healing returned a repaired volume to the default
+folder rather than the configured one; an unmounted mountpoint accepted writes the
+next mount would hide; rclone's output went to a pipe nothing drained, and a full pipe
+blocks the writer; unclean shutdowns are now reported with an offer to move stranded
+local files aside.
+
+Distribution: a Homebrew cask, served from `mlaify/homebrew-tap`.
+
+### v0.1.0 — 2026-09-17
+
+The first stable release. Mounts, unmounts, self-heals, and tears down in the right
+order. Signed, notarised, and distributable.
 
 ## Done
 
@@ -231,22 +267,49 @@ Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), w
 the unit of work — but the backlog is recorded here too, so this file remains a
 complete account of the project without needing GitHub open.
 
-In rough priority order.
+1. **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)). The one
+   that changes who can use grrclone: today a new user still needs `rclone config` in a
+   terminal before the app is any use to them, which is a hard stop for the audience it
+   is for. The form must be generated from the rc `config/providers` endpoint and never
+   hand-written per backend — the current build reports 1,147 options across all
+   providers, so a hand-maintained version is wrong the day rclone ships a new one.
+   OAuth should use rclone's own browser flow; `config/create` builds the remote.
 
-1. **M4 — reach:**
-   - **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)),
-     generated from `config/providers` and never hand-written per backend: the current
-     build reports 1,147 options across all providers, so any hand-maintained form is
-     wrong the day rclone ships a new one. OAuth should use rclone's own browser flow.
-   - **WebDAV/NetFS transport as an option**
-     ([#27](https://github.com/mlaify/grrclone/issues/27)). `MountTransport` was built
-     as a seam for this. It lands in `/Volumes` with a real eject button and no
-     privileged helper, but macOS `webdavfs` stages whole files before upload and
-     degrades badly on large directories, so it is a choice to offer, not a default.
+2. **WebDAV/NetFS transport as an option**
+   ([#27](https://github.com/mlaify/grrclone/issues/27)). `MountTransport` was built as
+   the seam for this and still has one implementation. Serving WebDAV and mounting with
+   `NetFSMountURLSync` and `kNetFSAllowLoopbackKey` lands in `/Volumes` with a real
+   eject button and no privileged helper. Known ceiling: macOS `webdavfs` stages whole
+   files before upload and degrades badly on large directories, so it is a choice to
+   offer with its tradeoffs stated, never a default.
 
-Known limitations that will not be fixed are filed too, so they can be pointed at
-rather than re-investigated: [#30](https://github.com/mlaify/grrclone/issues/30),
-AppleDouble `._` sidecars, which NFSv3 makes unavoidable. See Known issues below.
+3. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28)).
+   Blocked on notability alone — 75 stars, or 30 forks, or 30 watchers. The cask passes
+   `brew audit` otherwise; only that rule fails, which is circular for a project
+   Homebrew would help people find. The tap covers it meanwhile and the same cask goes
+   upstream unchanged when the bar is met.
+
+4. **Document the soft-mount tradeoff**
+   ([#42](https://github.com/mlaify/grrclone/issues/42)). Say plainly that `soft` trades
+   a hang for an I/O error after roughly two minutes, and that `--vfs-cache-mode full`
+   absorbs most of it because writes land in the local cache first. Documentation only;
+   `soft` is settled and right.
+
+Known limitations with no fix available are filed so they can be pointed at rather than
+re-investigated each time someone notices them:
+
+- **Locks are local only** ([#41](https://github.com/mlaify/grrclone/issues/41)).
+  `nolocks,locallocks` is what stops anything taking an `fcntl` lock hanging forever on
+  a lock daemon rclone does not run. The price is that two Macs can each hold an
+  "exclusive" lock on the same KeePass database. rclone's NFS server offers no
+  distributed locking, so the honest response is the warning now shown in connection
+  settings.
+- **AppleDouble `._` sidecars** ([#30](https://github.com/mlaify/grrclone/issues/30)).
+  NFSv3 cannot store extended attributes and macOS attaches `com.apple.provenance` to
+  every copy, so a sidecar appears beside almost every file. `--no-appledouble` is a
+  FUSE flag that does not exist on `serve nfs`, and filters govern what rclone reads,
+  not what the VFS writes back. The related `.DS_Store` problem **is** solved, in
+  Settings.
 
 ## Settled decisions
 
