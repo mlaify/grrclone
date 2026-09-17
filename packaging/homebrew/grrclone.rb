@@ -2,8 +2,7 @@ cask "grrclone" do
   version "0.2.0"
   sha256 "704794fb3b58cc4e632fc2a8b140f26876c7e54b86a79bfa9023a37e13bf651c"
 
-  url "https://github.com/mlaify/grrclone/releases/download/v#{version}/grrclone.dmg",
-      verified: "github.com/mlaify/grrclone/"
+  url "https://github.com/mlaify/grrclone/releases/download/v#{version}/grrclone.dmg"
   name "grrclone"
   desc "Menu bar app that mounts rclone remotes as Finder volumes"
   homepage "https://github.com/mlaify/grrclone"
@@ -15,7 +14,7 @@ cask "grrclone" do
 
   # Apple Silicon only, by decision — see docs/progress.md.
   depends_on arch: :arm64
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "grrclone.app"
 
