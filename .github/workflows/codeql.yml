@@ -1,0 +1,103 @@
+name: CodeQL
+
+# Advanced setup, not the default one, for a reason that was measured rather than
+# assumed.
+#
+# Default setup analyses Swift with autobuild, and autobuild builds only the SwiftPM
+# targets. Everything under App/grrclone — the entire UI, the keychain store, the
+# configuration password prompt — went unscanned while the badge stayed green.
+#
+# Proved with a canary: identical cleartext-password-into-UserDefaults code was placed
+# in a SwiftPM target and in the app target on one branch. CodeQL flagged the SwiftPM
+# one (swift/cleartext-storage-preferences, high) and said nothing about the app one.
+# Same code, same rule, one scanned and one invisible.
+#
+# So the Swift database is built here with the project's own build, which is the only
+# way the app target ends up in it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a newly published query finds old code without waiting for a commit.
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      security-events: write   # to upload results
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: swift
+            build-mode: manual
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+
+      # Everything below only applies to Swift. The actions analysis needs no build.
+      - name: Install XcodeGen
+        if: matrix.language == 'swift'
+        run: brew install xcodegen
+
+      # The icon and the bundled rclone are generated rather than committed, and
+      # XcodeGen's optional:true does not save you: the copy-resources phase still
+      # runs and xcodebuild fails without them.
+      - name: Generate the app icon
+        if: matrix.language == 'swift'
+        run: |
+          set -o pipefail
+          swift scripts/make-icon.swift
+          iconutil -c icns build/AppIcon.iconset -o App/grrclone/Resources/AppIcon.icns
+          test -s App/grrclone/Resources/AppIcon.icns
+
+      - name: Cache the bundled rclone
+        if: matrix.language == 'swift'
+        id: rclone-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: App/grrclone/Resources/rclone
+          key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
+
+      - name: Fetch the bundled rclone
+        if: matrix.language == 'swift' && steps.rclone-cache.outputs.cache-hit != 'true'
+        run: scripts/fetch-rclone.sh
+
+      # Both halves of the project, deliberately. The SwiftPM build alone is what
+      # autobuild was already doing, and the app target is the part that was missing.
+      - name: Build for analysis
+        if: matrix.language == 'swift'
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build
+          ( cd App && xcodegen generate >/dev/null )
+          xcodebuild -project App/grrclone.xcodeproj -scheme grrclone \
+            -configuration Debug -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
+        with:
+          category: "/language:${{ matrix.language }}"
