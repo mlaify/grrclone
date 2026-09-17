@@ -211,6 +211,24 @@ private struct ConnectionDetail: View {
         .onChange(of: connection.id) { _, _ in load() }
     }
 
+    /// Keeps a connection name usable as a single folder name.
+    ///
+    /// The name *is* the folder the remote is mounted in, so a separator in it creates
+    /// nested directories — and then the mount point no longer has the shape the rest
+    /// of the code assumes, which is how a repair could put a volume back one level
+    /// deeper than it found it. Neither `.` nor `..` is a usable folder either.
+    ///
+    /// Replaced rather than rejected, and the field is updated to show the result, so
+    /// the user sees what was saved instead of being told off.
+    static func sanitiseName(_ raw: String, fallback: String) -> String {
+        let cleaned = raw
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty || cleaned == "." || cleaned == ".." { return fallback }
+        return cleaned
+    }
+
     private var hasChanges: Bool {
         displayName != connection.displayName
             || readOnly != connection.options.readOnly
@@ -235,7 +253,7 @@ private struct ConnectionDetail: View {
     /// the id has not changed.
     private func save() {
         var updated = connection
-        updated.displayName = displayName.isEmpty ? connection.remote : displayName
+        updated.displayName = Self.sanitiseName(displayName, fallback: connection.remote)
         updated.options.readOnly = readOnly
         updated.options.vfsCacheMaxSize = cacheSize.isEmpty ? "20G" : cacheSize
         updated.connectAtLogin = connectAtLogin

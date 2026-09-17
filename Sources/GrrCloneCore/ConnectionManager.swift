@@ -395,16 +395,28 @@ public actor ConnectionManager {
         // Derived from the live mount point rather than remembered separately, so it
         // cannot drift from where the mount actually is.
         _ = try await connect(mount.connection,
-                              mountRoot: Self.mountRoot(containing: mount.mountPoint))
+                              mountRoot: Self.mountRoot(containing: mount.mountPoint,
+                                                        displayName: mount.connection.displayName))
     }
 
-    /// The folder a mount point sits in, which is the root it was mounted under.
+    /// The root a mount point was mounted under: its path with the connection's own
+    /// folder removed.
     ///
-    /// Each connection is mounted in a directory of its own beneath the root, so the
-    /// root is the parent. Standardised first: a path built from a `~` expansion and
-    /// one built from `/Users/...` must compare and rebuild identically.
-    static func mountRoot(containing mountPoint: URL) -> URL {
-        mountPoint.standardizedFileURL.deletingLastPathComponent()
+    /// Not simply the parent directory. A display name may contain a separator —
+    /// `prepareMountPoint` creates intermediate directories, so `team/docs` really does
+    /// mount at `<root>/team/docs` — and taking the parent would call `<root>/team` the
+    /// root. Reconnecting would then append the whole name again and land at
+    /// `<root>/team/team/docs`, which is the drift this function exists to prevent,
+    /// reintroduced one level down.
+    ///
+    /// So remove exactly as many components as the name contributed. Standardised
+    /// first, since a path built from a `~` expansion and one built from `/Users/…`
+    /// must compare and rebuild identically.
+    static func mountRoot(containing mountPoint: URL, displayName: String) -> URL {
+        let depth = max(displayName.split(separator: "/").filter { !$0.isEmpty }.count, 1)
+        var root = mountPoint.standardizedFileURL
+        for _ in 0..<depth { root = root.deletingLastPathComponent() }
+        return root
     }
 
     /// Paths in the mount table that look like ours but are not recorded as owned.
