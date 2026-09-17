@@ -15,14 +15,29 @@ name: CodeQL
 # So the Swift database is built here with the project's own build, which is the only
 # way the app target ends up in it.
 
+# Not on pull requests, deliberately.
+#
+# The Swift analysis compiles the whole project and runs security-extended over it,
+# which takes around fifteen minutes on a macOS runner. With several pull requests
+# open they queue behind one another and the last one waits the better part of an
+# hour — long enough that the cost is paid on every change while the benefit arrives
+# on almost none, since this has yet to find a real defect here.
+#
+# Running on main and weekly keeps the coverage and moves the wait off the critical
+# path: a finding still surfaces within a push, just after the merge rather than
+# before it. The trade is explicit — a vulnerability introduced by a pull request is
+# caught once it lands, not while it is being reviewed. Codex reviews every pull
+# request, and the build, test and privacy checks still gate them.
+#
+# Reinstate `pull_request` if this project ever gains contributors whose changes are
+# not read by the maintainer before merging.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   schedule:
     # Weekly, so a newly published query finds old code without waiting for a commit.
     - cron: "17 9 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
