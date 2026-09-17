@@ -62,14 +62,26 @@ pending immediately and drains in 9.6 s.
 waiting to *start*, so a file actively uploading shows an empty queue and the caller
 concludes, wrongly, that everything is stored.
 
+### Encrypted configurations (2026-09-17)
+
+An encrypted `rclone.conf` did not merely fail, it failed unintelligibly. The daemon
+started normally and the first call that read the config returned
+`panic received: fatal error: Failed to read line: EOF` — rclone trying to prompt for
+a password on a terminal the app does not have. Nothing in that mentions encryption,
+so the app reported an internal error and the user had no way to know what was wrong.
+
+grrclone now launches the daemon with `--ask-password=false`, which turns that panic
+into a legible `unable to decrypt configuration`, recognises it, and asks for the
+password. The password can be saved in the keychain, and a saved password that stops
+working is deleted rather than retried at every launch.
+
 ## Next
 
 In rough priority order.
 
-1. **Encrypted `rclone.conf` support** via `config/unlock`, password in Keychain.
-2. **Bandwidth limit** via `core/bwlimit`.
-3. **Log viewer**, so failures are diagnosable without a terminal.
-4. M4: add-remote wizard generated from `config/providers`, the WebDAV/NetFS transport
+1. **Bandwidth limit** via `core/bwlimit`.
+2. **Log viewer**, so failures are diagnosable without a terminal.
+3. M4: add-remote wizard generated from `config/providers`, the WebDAV/NetFS transport
    exposed as an option, Homebrew cask, opt-in Sparkle updates.
 
 ## Settled decisions
@@ -233,6 +245,45 @@ Recorded because each cost real time and each is easy to repeat.
 
 Newest first. One entry per working session, recording what changed and what was
 learned, so the reasoning survives even when the code moves on.
+
+### 2026-09-17 (encrypted configs) — a panic made legible
+
+Support for an encrypted `rclone.conf`, and two findings that changed the design.
+
+- Reproduced the actual failure before designing anything, against a throwaway
+  encrypted config. The important part was not that it failed but *how*: an
+  unexplained panic about reading a line, with no mention of encryption.
+- `config/unlock` reports success for a wrong password, so unlocking is verified by
+  reading the config afterwards.
+- The keychain item does not get the protection an earlier version claimed; the code
+  and its documentation were corrected to match what macOS actually does.
+- Verified the change does not disturb an unencrypted config: the real config still
+  lists its remotes with `--ask-password=false` in place, and no prompt appears.
+- 49 tests pass, up from 42. The lock classifier was checked by breaking it
+  deliberately and confirming the tests trip.
+
+### `config/unlock` does not say whether the password was right
+
+It returns HTTP 200 and `{}` for a wrong password exactly as it does for a correct
+one. Verified against rclone 1.75.1. Trusting the response would have reported success
+and then failed on the next call with an error the user could not connect to what they
+had just typed — and saved a wrong password to the keychain to fail again at every
+launch. `unlockConfig` therefore verifies by reading the config afterwards, and it is
+that read which decides.
+
+### The legacy keychain silently ignores `kSecAttrAccessible`
+
+`ConfigPasswordStore` first set `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and said
+in a comment that the password was unreadable while the Mac was locked. It was not. The
+modern data protection keychain honours that attribute, but reaching it needs the
+`keychain-access-groups` entitlement, which a Developer ID app cannot carry without an
+embedded provisioning profile — `SecItemAdd` fails with `-34018`. Items therefore land
+in the legacy file keychain, which stored no such attribute at all.
+
+The test caught it only because it read the attributes back instead of trusting that
+the write meant what it said. A security property that is asserted in a comment and
+never verified is not a property. The documentation now describes what the store
+actually provides.
 
 ### 2026-09-17 — v0.1.0, and a real migration
 

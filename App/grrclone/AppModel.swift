@@ -29,6 +29,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var foreignMounts: [String] = []
     @Published var lastError: String?
     @Published private(set) var activity = ConnectionManager.Activity()
+    /// True when the user's rclone config is encrypted, which enables the
+    /// configuration section in Settings.
+    @Published private(set) var configIsEncrypted = false
+    @Published private(set) var hasSavedConfigPassword = false
+    /// True when the config is encrypted and still locked, because the user cancelled
+    /// the prompt. Drives the "Unlock Configuration" item in the menu, so cancelling is
+    /// recoverable without restarting the app.
+    @Published private(set) var configLocked = false
+    private var configPasswordStore: ConfigPasswordStore?
 
     private var activityPoller: Task<Void, Never>?
     private let systemEvents = SystemEvents()
@@ -76,6 +85,16 @@ final class AppModel: ObservableObject {
                 status = "Recovered \(report.cleaned.count) mount(s) from a previous session"
             }
 
+            // An encrypted config fails here, not at daemon start: rclone starts
+            // happily and only objects when something reads the config.
+            guard try await unlockConfigIfNeeded(client) else {
+                status = "Configuration locked"
+                configLocked = true
+                daemonReady = true
+                ConfigPasswordPrompt.explainCancelled()
+                return
+            }
+
             let remotes = try await client.listRemotes()
             _ = try? await store.adoptNewRemotes(remotes)
 
@@ -86,6 +105,95 @@ final class AppModel: ObservableObject {
             startPollingActivity()
         } catch {
             status = "rclone failed to start"
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// True when the config is readable, false when the user declined to unlock it.
+    ///
+    /// The flow, in the order it has to happen:
+    ///
+    /// 1. Try to read the config. Unencrypted configs take this path and stop here, so
+    ///    nobody without an encrypted config ever sees a password prompt.
+    /// 2. If it is locked, try a password saved in the keychain. A returning user with
+    ///    a saved password is never prompted.
+    /// 3. A saved password that no longer works is **deleted**, not kept and retried
+    ///    at every launch. Someone who changes their config password would otherwise
+    ///    be prompted forever with a stale password silently failing first.
+    /// 4. Otherwise ask, and keep asking while the password is wrong, until it works or
+    ///    the user cancels.
+    @discardableResult
+    private func unlockConfigIfNeeded(_ client: RcloneRCClient) async throws -> Bool {
+        guard await client.isConfigLocked() else { return true }
+
+        let path = (try? await client.configPaths().config) ?? "your rclone configuration"
+        let passwords = ConfigPasswordStore(configPath: path)
+        self.configPasswordStore = passwords
+
+        hasSavedConfigPassword = passwords.hasSavedPassword
+
+        if let saved = passwords.load() {
+            do {
+                try await client.unlockConfig(password: saved)
+                configIsEncrypted = true
+                configLocked = false
+                return true
+            } catch RcloneRCError.configPasswordRejected {
+                // Stale. Remove it rather than failing silently at every launch.
+                try? passwords.forget()
+            }
+        }
+
+        var retrying = false
+        while true {
+            guard let response = ConfigPasswordPrompt.ask(configPath: path, retrying: retrying)
+            else { return false }
+
+            do {
+                try await client.unlockConfig(password: response.password)
+            } catch RcloneRCError.configPasswordRejected {
+                retrying = true
+                continue
+            }
+
+            if response.shouldSave {
+                // A failure to save is worth saying out loud: the user asked not to be
+                // prompted again, and silently ignoring that is a small betrayal.
+                do {
+                    try passwords.save(response.password)
+                    hasSavedConfigPassword = true
+                } catch {
+                    lastError = "Could not save the password: \(error.localizedDescription)"
+                }
+            }
+            configIsEncrypted = true
+            configLocked = false
+            return true
+        }
+    }
+
+    /// Prompt for the password again after the user cancelled, from the menu.
+    func unlockConfiguration() async {
+        guard let supervisor, let client = try? await supervisor.requireClient() else { return }
+        do {
+            guard try await unlockConfigIfNeeded(client) else { return }
+            let remotes = try await client.listRemotes()
+            _ = try? await store.adoptNewRemotes(remotes)
+            status = "Ready"
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Forget a saved config password. Exposed in Settings so the choice to remember it
+    /// is reversible without opening Keychain Access.
+    func forgetConfigPassword() {
+        guard let configPasswordStore else { return }
+        do {
+            try configPasswordStore.forget()
+            hasSavedConfigPassword = false
+        } catch {
             lastError = error.localizedDescription
         }
     }

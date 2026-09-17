@@ -188,6 +188,13 @@ public actor RcloneRCClient {
 public enum RcloneRCError: Error, LocalizedError {
     case unexpectedResponse(String)
     case unsupportedVersion(found: String, minimum: String)
+    /// The configuration file is encrypted and no password has been supplied.
+    case configLocked
+    /// A password was supplied for an encrypted config and did not decrypt it.
+    ///
+    /// Determined by reading the config afterwards, not from the response to
+    /// `config/unlock`, which reports success either way. See `ConfigLock.swift`.
+    case configPasswordRejected
 
     public var errorDescription: String? {
         switch self {
@@ -197,6 +204,10 @@ public enum RcloneRCError: Error, LocalizedError {
             return "rclone \(found) is too old. grrclone needs \(minimum) or later, "
                  + "because earlier versions have NFS defects that cause stale handles, "
                  + "failed file creation, and broken large-directory listings."
+        case .configLocked:
+            return "Your rclone configuration is encrypted. Enter its password to continue."
+        case .configPasswordRejected:
+            return "That password did not decrypt the rclone configuration."
         }
     }
 }

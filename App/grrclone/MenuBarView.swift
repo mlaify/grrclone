@@ -49,6 +49,14 @@ struct MenuBarView: View {
                     .lineLimit(1)
             }
             Spacer()
+            if model.configLocked {
+                // Cancelling the password prompt must not be a one-way door that needs
+                // a restart to undo.
+                Button("Unlock…") {
+                    Task { await model.unlockConfiguration() }
+                }
+                .help("Enter the password for your encrypted rclone configuration")
+            }
             if !model.daemonReady {
                 ProgressView().controlSize(.small)
             }
