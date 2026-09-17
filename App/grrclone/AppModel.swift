@@ -53,6 +53,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastUpdateCheck: Date?
     @Published private(set) var updateCheckInProgress = false
 
+    /// Whether `rclone.conf` on disk is encrypted. Drives the offer to encrypt it,
+    /// and the honesty of what the wizard says about where passwords go.
+    @Published private(set) var configIsEncryptedOnDisk = false
+    @Published private(set) var configPath: String = ""
+
     /// How this copy was installed, which decides who may update it.
     let installation = InstallationKind.detect()
 
@@ -265,6 +270,7 @@ final class AppModel: ObservableObject {
         await applySavedBandwidthLimit()
 
         await connectLoginItems()
+        await refreshConfigEncryptionState()
         if updateChecksEnabled { checkForUpdates() }
         startWatchingForBreakage()
         startPollingActivity()
@@ -381,6 +387,58 @@ final class AppModel: ObservableObject {
     }
 
     func dismissUncleanShutdown() { uncleanShutdown = nil }
+
+    // MARK: - Configuration encryption
+
+    /// Look at the file, not the daemon.
+    ///
+    /// A running daemon that has already been given the password answers questions
+    /// about the config perfectly well, so its behaviour says nothing about what is
+    /// sitting on disk.
+    func refreshConfigEncryptionState() async {
+        guard let supervisor, let client = try? await supervisor.requireClient() else { return }
+        guard let path = try? await client.configPaths().config, !path.isEmpty else { return }
+        configPath = path
+        configIsEncryptedOnDisk = ConfigEncryption.isEncrypted(configPath: path)
+    }
+
+    /// Encrypt the configuration, then hand the password to the running daemon.
+    ///
+    /// The unlock matters: the daemon keeps working from its in-memory copy, so
+    /// nothing breaks immediately, and the failure would only appear later when
+    /// something made it re-read the file. Verified against a live daemon — mounts
+    /// stay up throughout.
+    func encryptConfiguration(password: String, remember: Bool) async {
+        guard let supervisor, let client = try? await supervisor.requireClient() else { return }
+        guard let binary = DaemonSupervisor.locateBinary(bundled: Self.bundledRcloneURL()) else {
+            lastError = "No rclone binary was found."
+            return
+        }
+
+        do {
+            try ConfigEncryption.encrypt(rclone: binary, configPath: configPath,
+                                         password: password)
+            try await client.unlockConfig(password: password)
+
+            configIsEncryptedOnDisk = true
+            configIsEncrypted = true
+
+            if remember {
+                let store = ConfigPasswordStore(configPath: configPath)
+                configPasswordStore = store
+                do {
+                    try store.save(password)
+                    hasSavedConfigPassword = true
+                } catch {
+                    lastError = "Encrypted, but the password could not be saved: "
+                              + error.localizedDescription
+                }
+            }
+            status = "Configuration encrypted"
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
 
     // MARK: - Remotes
 

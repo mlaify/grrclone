@@ -193,7 +193,20 @@ struct AddRemoteWizard: View {
                     .font(.caption)
                 }
             } else if option.isPassword || option.sensitive {
-                SecureField(option.name, text: binding)
+                VStack(alignment: .leading, spacing: 4) {
+                    SecureField(option.name, text: binding)
+                    // Said where the password is typed, not buried in Settings. A
+                    // SecureField implies protection it does not provide: rclone
+                    // obscures this value, and `rclone reveal` undoes that in one step.
+                    if !model.configIsEncryptedOnDisk {
+                        Label("Stored in your rclone configuration, obscured rather than "
+                              + "encrypted. Encrypt the configuration in Settings to "
+                              + "protect it properly.",
+                              systemImage: "exclamationmark.triangle")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } else if option.type == "bool" {
                 Toggle(option.name, isOn: Binding(
                     get: { (values[option.name] ?? option.defaultValue) == "true" },
