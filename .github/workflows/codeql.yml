@@ -49,14 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-          queries: security-extended
-
-      # Everything below only applies to Swift. The actions analysis needs no build.
+      # Everything the Swift build needs, prepared BEFORE CodeQL initialises.
+      #
+      # Order is load-bearing. codeql-action/init sets DYLD_INSERT_LIBRARIES to its
+      # build tracer, and under that, Homebrew runs as x86_64 and refuses to install
+      # into the ARM prefix: "Cannot install under Rosetta 2 in ARM default prefix".
+      # Preparing first also keeps Homebrew's own compilation out of the database,
+      # which should contain this project and nothing else.
       - name: Install XcodeGen
         if: matrix.language == 'swift'
         run: brew install xcodegen
@@ -83,6 +82,13 @@ jobs:
       - name: Fetch the bundled rclone
         if: matrix.language == 'swift' && steps.rclone-cache.outputs.cache-hit != 'true'
         run: scripts/fetch-rclone.sh
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
 
       # Both halves of the project, deliberately. The SwiftPM build alone is what
       # autobuild was already doing, and the app target is the part that was missing.
