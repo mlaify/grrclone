@@ -99,10 +99,7 @@ final class AppModel: ObservableObject {
             _ = try? await store.adoptNewRemotes(remotes)
 
             daemonReady = true
-            status = "Ready"
-            await refresh()
-            startWatchingForBreakage()
-            startPollingActivity()
+            await finishStartup()
         } catch {
             status = "rclone failed to start"
             lastError = error.localizedDescription
@@ -140,7 +137,21 @@ final class AppModel: ObservableObject {
                 return true
             } catch RcloneRCError.configPasswordRejected {
                 // Stale. Remove it rather than failing silently at every launch.
-                try? passwords.forget()
+                //
+                // The published flag has to follow. Leaving it true after the item is
+                // gone makes Settings claim the password is saved and offer to forget
+                // something that no longer exists, while the next launch prompts again
+                // — the app contradicting itself about the one thing the user asked it
+                // to remember. A deletion that fails is reported rather than hidden,
+                // because then the stale item really is still there.
+                do {
+                    try passwords.forget()
+                    hasSavedConfigPassword = false
+                } catch {
+                    lastError = "Could not remove the saved configuration password: "
+                             + error.localizedDescription
+                    hasSavedConfigPassword = passwords.hasSavedPassword
+                }
             }
         }
 
@@ -172,15 +183,45 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Everything that has to happen once the config can actually be read.
+    ///
+    /// Factored out because there are two ways to arrive here. Cancelling the password
+    /// prompt returns from `start()` early, and `connectLoginItems()` — called by the
+    /// app delegate immediately after `start()` — then runs against an empty list. If
+    /// unlocking later only refreshed the rows, the app would sit there with nothing
+    /// connected at login, no activity reporting, and no wake or network self-healing,
+    /// until it was restarted. The user would have no way to know that unlocking had
+    /// left them in a lesser state than launching unlocked.
+    ///
+    /// Idempotent: the watchers must not be started twice if this runs again.
+    private var startupCompleted = false
+
+    private func finishStartup() async {
+        let remotes = (try? await requireClientRemotes()) ?? []
+        if !remotes.isEmpty { _ = try? await store.adoptNewRemotes(remotes) }
+
+        status = "Ready"
+        await refresh()
+
+        guard !startupCompleted else { return }
+        startupCompleted = true
+
+        await connectLoginItems()
+        startWatchingForBreakage()
+        startPollingActivity()
+    }
+
+    private func requireClientRemotes() async throws -> [String] {
+        guard let supervisor else { return [] }
+        return try await supervisor.requireClient().listRemotes()
+    }
+
     /// Prompt for the password again after the user cancelled, from the menu.
     func unlockConfiguration() async {
         guard let supervisor, let client = try? await supervisor.requireClient() else { return }
         do {
             guard try await unlockConfigIfNeeded(client) else { return }
-            let remotes = try await client.listRemotes()
-            _ = try? await store.adoptNewRemotes(remotes)
-            status = "Ready"
-            await refresh()
+            await finishStartup()
         } catch {
             lastError = error.localizedDescription
         }
