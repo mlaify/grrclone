@@ -99,6 +99,15 @@ struct SettingsView: View {
                 }
             }
             Section {
+                BandwidthLimitField(model: model)
+            } footer: {
+                Text("Limits every transfer, since one rclone process serves all your "
+                     + "connections. Use rclone's syntax — 10M, 512k, or 1M:100k for "
+                     + "separate upload and download limits. Leave empty for no limit. "
+                     + "Takes effect immediately, including on transfers already running.")
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 LabeledContent("Mount folder") {
                     HStack {
                         Text(model.mountRoot.path)
@@ -323,6 +332,33 @@ private struct LaunchAtLoginToggle: View {
             }
         if let error {
             Text(error).font(.caption).foregroundStyle(.red)
+        }
+    }
+}
+
+/// The bandwidth limit field.
+///
+/// Applied on commit rather than as you type: a partially typed `1M` is `1`, which is
+/// a valid limit of one byte per second and would throttle everything to a standstill
+/// for as long as it took to type the next character.
+private struct BandwidthLimitField: View {
+    @ObservedObject var model: AppModel
+    @State private var text: String = ""
+    @State private var editing = false
+
+    var body: some View {
+        LabeledContent("Bandwidth limit") {
+            TextField("Unlimited", text: $text)
+                .multilineTextAlignment(.trailing)
+                .onSubmit { model.updateBandwidthLimit(text) }
+                .onAppear { text = model.bandwidthLimit }
+                // Follow the model unless the user is mid-edit, so the field shows
+                // what rclone actually applied — `1M` comes back as `1Mi` — without
+                // rewriting what someone is still typing.
+                .onChange(of: model.bandwidthLimit) { _, applied in
+                    if !editing { text = applied }
+                }
+                .onChange(of: text) { _, _ in editing = true }
         }
     }
 }

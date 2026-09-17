@@ -14,6 +14,7 @@ func usage() -> Never {
       grrclonectl mounts                      show what grrclone owns, and what it does not
       grrclonectl connect <remote> [name]     serve and mount a remote under ~/grrclone
       grrclonectl disconnect <name>           unmount and stop serving
+      grrclonectl bwlimit [rate]              show or set the transfer limit (e.g. 10M, 1M:100k, off)
       grrclonectl reconcile                   clean up orphans from an unclean shutdown
       grrclonectl recovery-test <remote>      connect, kill the server, verify self-repair
       grrclonectl drain-test <remote>         write a large file, verify uploads are tracked
@@ -69,6 +70,23 @@ do {
         for name in try await client.listRemotes().sorted() {
             print("\(name)\t\(types[name] ?? "?")")
         }
+        await supervisor.stop()
+
+    case "bwlimit":
+        let supervisor = try makeSupervisor()
+        let client = try await supervisor.start()
+        let limit: RcloneRCClient.Bandwidth
+        if arguments.count > 1 {
+            limit = try await client.setBandwidthLimit(arguments[1])
+        } else {
+            limit = try await client.bandwidthLimit()
+        }
+        func describe(_ bytes: Int) -> String {
+            bytes < 0 ? "unlimited" : "\(bytes) B/s"
+        }
+        print("rate     \(limit.rate)")
+        print("upload   \(describe(limit.upload))")
+        print("download \(describe(limit.download))")
         await supervisor.stop()
 
     case "mounts":

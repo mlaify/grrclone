@@ -21,8 +21,28 @@ public actor UnixSocketHTTP {
             case .connectionFailed(let d): return "Could not reach the rclone control socket: \(d)"
             case .timedOut: return "The rclone control socket did not respond in time."
             case .malformedResponse(let d): return "Malformed response from rclone: \(d)"
-            case .http(let status, let body): return "rclone returned HTTP \(status): \(body)"
+            case .http(let status, let body): return "rclone: \(Failure.message(from: body, status: status))"
             }
+        }
+
+        /// Pull the human part out of an rc error response.
+        ///
+        /// rclone answers a bad request with a JSON object whose `error` field is the
+        /// actual message and whose other fields repeat the request. Showing the whole
+        /// blob was tolerable while these strings only reached a log; now that they are
+        /// shown in the menu, a user asking for a bandwidth limit of "banana" should
+        /// read `bad bwlimit: bad suffix 'a'`, not six lines of JSON.
+        ///
+        /// Falls back to the raw body, because an unparseable error is still better
+        /// than no error.
+        static func message(from body: String, status: Int) -> String {
+            guard let data = body.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let error = object["error"] as? String, !error.isEmpty
+            else {
+                return "HTTP \(status): \(body)"
+            }
+            return error
         }
     }
 
