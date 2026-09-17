@@ -388,6 +388,14 @@ final class AppModel: ObservableObject {
 
     func dismissUncleanShutdown() { uncleanShutdown = nil }
 
+    /// Set when the user asks to add a remote.
+    ///
+    /// The wizard is presented by the Settings window rather than by the menu, because
+    /// the menu bar popover closes the moment anything takes focus — including a click
+    /// in the wizard's own search field. A sheet on the popover therefore vanishes as
+    /// soon as it is used. Settings is a real window and does not.
+    @Published var showAddRemote = false
+
     // MARK: - Interactive remote setup
 
     /// Start configuring a remote that asks questions rather than taking a form.

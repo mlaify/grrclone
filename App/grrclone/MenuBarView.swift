@@ -4,7 +4,6 @@ import GrrCloneCore
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
 
-    @State private var showAddRemote = false
 
     /// Measured height of the connection list. See the comment at its use site.
     @State private var listHeight: CGFloat = 0
@@ -79,9 +78,6 @@ struct MenuBarView: View {
             footer
         }
         .frame(width: 320)
-        .sheet(isPresented: $showAddRemote) {
-            AddRemoteWizard(model: model)
-        }
     }
 
     /// Shows the last error, because until now nothing did.
@@ -271,9 +267,16 @@ struct MenuBarView: View {
             Button("Settings…") { SettingsWindow.open() }
                 .buttonStyle(.plain)
             Spacer()
-            Button("Add Remote…") { showAddRemote = true }
-                .buttonStyle(.plain)
-                .help("Create an rclone remote without using the terminal")
+            Button("Add Remote…") {
+                // Open the window first, then ask it to present the wizard. Presenting
+                // from here put the sheet on the popover, which closes as soon as
+                // anything is clicked — the wizard appeared and then disappeared the
+                // instant you used it.
+                SettingsWindow.open()
+                model.showAddRemote = true
+            }
+            .buttonStyle(.plain)
+            .help("Create an rclone remote without using the terminal")
             Spacer()
             Button("Check mounts") { model.checkHealthNow() }
                 .buttonStyle(.plain)

@@ -41,6 +41,13 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Add Remote…") { model.showAddRemote = true }
+                }
+            }
+
             if let id = selection, let row = model.rows.first(where: { $0.id == id }) {
                 ConnectionDetail(connection: row.connection, model: model)
             } else {
@@ -54,6 +61,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .sheet(isPresented: $model.showAddRemote) {
+            AddRemoteWizard(model: model)
+        }
         // Land on something useful. Opening to an empty pane and a "Choose…" prompt
         // makes the user do a step the app can do for them, and with one remote
         // configured there is nothing to choose.
