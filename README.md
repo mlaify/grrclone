@@ -117,6 +117,25 @@ same owner — so grrclone only ever unmounts paths recorded in its own registry
 lists what it can see but does not own under "Not managed by grrclone", so the boundary
 is visible.
 
+## What it cannot do
+
+Three limits worth knowing before you rely on it, each a consequence of NFSv3 rather
+than something grrclone chose. [docs/limitations.md](docs/limitations.md) has the
+detail and the measurements.
+
+**File locks are not shared between Macs.** rclone's NFS server runs no lock daemon,
+so locks are satisfied locally — without that, anything taking one would hang forever.
+Two Macs can each believe they hold an exclusive lock on the same KeePass database.
+
+**`._` files appear beside almost everything.** NFSv3 cannot store extended
+attributes, and macOS attaches one to every copy. `--no-appledouble` is a FUSE flag
+that does not exist here, and filters do not help. The related `.DS_Store` problem
+*is* solved, in Settings.
+
+**A dead backend gives an error, not a hang** — after about two minutes. That is the
+deliberate trade: the alternative wedges Finder until you reboot. Writes usually
+survive it, because they land in a local cache first.
+
 ## Privacy
 
 - No telemetry, no analytics, no crash reporting.
@@ -165,6 +184,7 @@ large directories.
 
 ## More
 
+- [docs/limitations.md](docs/limitations.md) — what grrclone cannot fix, and why
 - [docs/migrating.md](docs/migrating.md) — moving from a hand-rolled launchd mount
   without changing your paths
 - [docs/benchmarks.md](docs/benchmarks.md) — why NFS, the numbers, and the defects found
