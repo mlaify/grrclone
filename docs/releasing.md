@@ -4,10 +4,19 @@ Tagging builds, signs, notarises and publishes a DMG. The workflow runs the same
 `scripts/release.sh` used locally, so a release from CI and one from a laptop are the
 same artefact produced the same way.
 
+**Bump `MARKETING_VERSION` in `App/project.yml` first**, in its own commit. The tag is
+only a label: nothing else makes the app report the version you are releasing, so
+without this the About box, Finder's Get Info and every crash report would still name
+the previous one. The workflow now checks the two agree and fails before signing
+anything if they do not, so this is enforced rather than remembered.
+
 ```bash
 git tag -s v0.1.0 -m "grrclone 0.1.0"
 git push origin v0.1.0
 ```
+
+A pre-release suffix belongs to the tag alone: `v0.2.0-rc1` and `v0.2.0` both expect
+`MARKETING_VERSION` to be `0.2.0`.
 
 `workflow_dispatch` can rebuild an existing tag. The tag must match `v<version>`; the
 workflow refuses anything else rather than interpolating a free-text field into a git

@@ -225,6 +225,14 @@ private struct ConnectionDetail: View {
         connectAtLogin = connection.connectAtLogin
     }
 
+    /// Saves, then shows what was actually saved.
+    ///
+    /// Empty fields are filled in with a fallback — a blank name would leave the mount
+    /// folder unnamed — and the draft has to be told, or it keeps showing the empty
+    /// field the user left behind. `hasChanges` then stays true forever: Apply and
+    /// Revert remain lit after a save that succeeded, which reads as a failure. The
+    /// usual reload does not cover this, since it is keyed on the connection's id and
+    /// the id has not changed.
     private func save() {
         var updated = connection
         updated.displayName = displayName.isEmpty ? connection.remote : displayName
@@ -232,6 +240,11 @@ private struct ConnectionDetail: View {
         updated.options.vfsCacheMaxSize = cacheSize.isEmpty ? "20G" : cacheSize
         updated.connectAtLogin = connectAtLogin
         model.update(updated)
+
+        displayName = updated.displayName
+        cacheSize = updated.options.vfsCacheMaxSize
+        readOnly = updated.options.readOnly
+        connectAtLogin = updated.connectAtLogin
     }
 }
 

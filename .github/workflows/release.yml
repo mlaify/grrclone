@@ -52,6 +52,31 @@ jobs:
         with:
           ref: ${{ env.TAG }}
 
+      # A tag is just a label; nothing else ties it to what the app reports as its
+      # version. Without this, tagging v0.2.0 publishes a release whose About box,
+      # Finder Get Info and crash reports all still say 0.1.0 — and the only thing
+      # standing between the project and that is remembering an undocumented manual
+      # edit to project.yml. Fail here instead, where it is cheap and obvious.
+      - name: Check the app version matches the tag
+        run: |
+          set -euo pipefail
+          # v0.2.0 and v0.2.0-rc1 must both correspond to MARKETING_VERSION 0.2.0:
+          # the pre-release suffix belongs to the tag, not to the bundle version.
+          WANTED="${TAG#v}"
+          WANTED="${WANTED%%-*}"
+          ACTUAL=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' \
+                     App/project.yml | head -1)
+          if [ -z "$ACTUAL" ]; then
+            echo "::error::could not read MARKETING_VERSION from App/project.yml"
+            exit 1
+          fi
+          if [ "$WANTED" != "$ACTUAL" ]; then
+            echo "::error::tag $TAG expects MARKETING_VERSION $WANTED, but App/project.yml says $ACTUAL."
+            echo "::error::Update MARKETING_VERSION in App/project.yml and re-tag."
+            exit 1
+          fi
+          echo "version $ACTUAL matches tag $TAG"
+
       - name: Install XcodeGen
         run: brew install xcodegen
 

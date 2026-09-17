@@ -253,3 +253,46 @@ final class MountHealthTests: XCTestCase {
         XCTAssertEqual(MountHealth.backoff(attempt: -1), 1)
     }
 }
+
+/// Self-healing must put a mount back where it was.
+///
+/// The repair path used to call `connect` without a root, which falls back to the
+/// default `~/grrclone`. On a machine using a configured mount folder, a mount that
+/// went unhealthy after sleep would come back in a different place — with every path
+/// pointing at it now broken, as the result of a repair nobody asked for.
+final class ReconnectMountRootTests: XCTestCase {
+
+    func testRootIsTheParentOfTheMountPoint() {
+        let mountPoint = URL(fileURLWithPath: "/Users/someone/Cloud/dav1")
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint).path,
+                       "/Users/someone/Cloud")
+    }
+
+    /// The case that motivated the fix: a root that is not the default.
+    func testACustomRootSurvivesARepair() {
+        let mountPoint = URL(fileURLWithPath: "/Users/someone/CloudVaults/vaults")
+        let root = ConnectionManager.mountRoot(containing: mountPoint)
+
+        XCTAssertNotEqual(root, ConnectionManager.defaultMountRoot())
+        // Rebuilding from the derived root must land on the original path.
+        XCTAssertEqual(root.appendingPathComponent("vaults", isDirectory: true)
+                        .standardizedFileURL.path,
+                       mountPoint.standardizedFileURL.path)
+    }
+
+    /// A mount directly under the home folder, which is what the migration produced.
+    func testHandlesARootThatIsTheHomeFolder() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let mountPoint = home.appendingPathComponent("Cloud", isDirectory: true)
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: mountPoint).path, home.path)
+    }
+
+    /// Trailing slashes and unstandardised paths must not produce a different root,
+    /// or a repair would recreate the mount one directory too high.
+    func testTrailingSlashesAndDotSegmentsDoNotChangeTheRoot() {
+        let plain = URL(fileURLWithPath: "/Users/someone/Cloud/dav1")
+        let awkward = URL(fileURLWithPath: "/Users/someone/Cloud/./dav1/")
+        XCTAssertEqual(ConnectionManager.mountRoot(containing: plain).path,
+                       ConnectionManager.mountRoot(containing: awkward).path)
+    }
+}
