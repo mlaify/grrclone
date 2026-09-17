@@ -3,60 +3,67 @@
 A free, open-source macOS menu bar app that connects [rclone](https://rclone.org)
 remotes as Finder volumes.
 
-Like Mountain Duck, without the licence key, the phone-home, or the kernel extension.
+No licence key. No phone-home. No kernel extension. No root.
 
-```
-┌─ grrclone ──────────────────┐
-│ Ready                       │
-├─────────────────────────────┤
-│ ● Cloud        ~/grrclone/… │  Disconnect
-│ ○ Vaults       Not connected│  Connect
-├─────────────────────────────┤
-│ Settings…  Check mounts  Quit│
-└─────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/images/menu.png" alt="The grrclone menu, listing connected remotes" width="420">
+</p>
 
-## Status
+## Why this exists
 
-**Pre-release.** It runs and mounts remotes reliably today, but there is no signed
-build yet, so you have to build it yourself.
+Because the options were bad. There are very few rclone GUIs for macOS, the few that
+exist mostly cost money, several phone home, and the rest are some combination of
+incomplete, awkward and buggy. Paying a licence fee to mount a drive you already own,
+using a tool that is already free, is a strange place to end up.
 
-| | |
-|---|---|
-| Works | Auto-discovery of your rclone remotes, connect and disconnect, connect at login, per-connection settings, recovery from sleep and network changes, recovery from an unclean shutdown, ordered teardown on quit |
-| Not yet | Signed and notarised releases, Homebrew cask, transfer queue window, add-remote wizard, bandwidth limits, encrypted `rclone.conf` support |
+So grrclone is the app that should have existed: it mounts your remotes, it stays out
+of the way, it asks for nothing, and it tells no one.
 
-## Why
+## Install
 
-Mounting cloud storage in Finder on macOS has had three unappealing options: pay for a
-proprietary app, install a kernel extension, or run rclone by hand from a shell script.
+Download the latest DMG from [Releases](https://github.com/mlaify/grrclone/releases),
+drag it to Applications, and open it. It is signed and notarised, so Gatekeeper opens
+it without argument.
 
-grrclone is the fourth. It uses rclone's NFS server over loopback and mounts it with
-macOS's built-in NFS client, so there is no macFUSE, no FUSE-T, no kernel extension, and
-no root.
+Apple Silicon only. Requires macOS 14 or later.
 
-## How it works
+It appears in the menu bar with no Dock icon, finds the remotes already in your
+`rclone.conf`, and lists them.
 
-grrclone runs a single bundled `rclone` daemon and, for each connection, starts an NFS
-server bound to loopback, then mounts it itself.
+<p align="center">
+  <img src="docs/images/settings.png" alt="grrclone settings" width="520">
+</p>
 
-That last part matters. grrclone deliberately does **not** use `rclone nfsmount` or the
-`mount/mount` control endpoint, because both hardcode their mount options to `port`,
-`mountport` and `tcp`. That leaves macOS's default **hard, non-interruptible** mount, so
-when the backend dies Finder beachballs and processes wedge until you reboot.
+## What it does
 
-grrclone issues its own mount call:
+Auto-discovers your rclone remotes, connects and disconnects them, reconnects at login,
+and repairs mounts after sleep or a network change. Per-connection settings for the
+mount name, read-only and cache size. Recovers from an unclean shutdown, and tears
+mounts down in the right order when you quit, so Finder never hangs on a dead server.
+
+Mounts land in a folder of your choosing — `~/grrclone` by default, and settable in
+Settings, so grrclone can take over the paths an existing setup already uses.
+
+## How it works, and why that matters
+
+grrclone runs one bundled `rclone` daemon, starts an NFS server on loopback per
+connection, and **performs the mount itself**.
+
+That last part is the whole design. It deliberately avoids `rclone nfsmount` and the
+`mount/mount` endpoint, because both hardcode their mount options and leave you with
+macOS's default **hard, non-interruptible** mount — so when the backend dies, Finder
+beachballs and processes wedge until you reboot. grrclone mounts with:
 
 ```
 soft,intr,timeo=600,retrans=2,nolocks,locallocks,nfc,rsize=131072,wsize=131072
 ```
 
-Measured with a server killed under a live mount: an error after **7.1 seconds**, and a
-clean recovery with no reboot. `nolocks` is there because rclone's NFS server runs no
-lock daemon, so anything taking a file lock — SQLite, Office, Adobe — would otherwise
-hang waiting on a daemon that does not exist.
+Measured with the server killed under a live mount: an error after **7.1 seconds** and
+a clean recovery, no reboot. `nolocks` is there because rclone's NFS server runs no lock
+daemon, so anything taking a file lock — SQLite, Office, Adobe — would otherwise hang
+waiting on a daemon that does not exist.
 
-Performance, against a real WebDAV remote over the internet:
+Throughput against a real WebDAV remote over the internet:
 
 | | `rclone copy` | through the mount |
 |---|---|---|
@@ -64,17 +71,17 @@ Performance, against a real WebDAV remote over the internet:
 | Write, end to end | 15.3 MB/s | 11.9 MB/s |
 | List 1,000 entries | 1.79 s | 0.64 s |
 
-Full method and numbers in [docs/benchmarks.md](docs/benchmarks.md).
+Method and full numbers in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## It will not touch your existing mounts
 
 If you already run rclone yourself, grrclone leaves your mounts strictly alone.
 
-This is not a nicety, it is enforced. In the kernel's mount table a hand-rolled
+That is enforced, not promised. In the kernel's mount table a hand-rolled
 `rclone nfsmount` is indistinguishable from grrclone's own — same `localhost:/` source,
-same owner — so grrclone only ever unmounts paths recorded in its own registry. The
-menu lists anything it can see but does not own under "Not managed by grrclone", so the
-boundary is visible rather than merely promised.
+same owner — so grrclone only ever unmounts paths recorded in its own registry. The menu
+lists what it can see but does not own under "Not managed by grrclone", so the boundary
+is visible.
 
 ## Privacy
 
@@ -88,64 +95,53 @@ boundary is visible rather than merely promised.
   runtime.
 
 grrclone **reads** your `rclone.conf` but never writes it, so your command-line setup
-keeps working exactly as before.
+keeps working exactly as before. A CI check fails the build if any of this regresses.
 
-## Requirements
-
-- macOS 14 or later
-- rclone 1.74.4 or later
-
-That version floor is deliberate. Earlier rclone releases have NFS defects that cause
-stale file handles, failed file creation, and broken listings of large directories.
-Releases will bundle a pinned rclone; a Homebrew install can be used instead.
-
-## Building
+## Building it yourself
 
 ```bash
-brew install rclone xcodegen
+brew install xcodegen
+swift scripts/make-icon.swift                 # the icon is generated, not committed
+iconutil -c icns build/AppIcon.iconset -o App/grrclone/Resources/AppIcon.icns
+scripts/fetch-rclone.sh                       # pinned and checksummed
 scripts/build-app.sh
-open build/Build/Products/Debug/grrclone.app
 ```
 
-It appears in the menu bar with no Dock icon, finds the remotes already in your
-`rclone.conf`, and lists them. Mounts land in `~/grrclone/<name>`.
+The icon and the bundled rclone are both generated rather than committed, so a fresh
+clone needs those two steps before the app will build.
 
-## The core, without the app
-
-All the logic lives in Swift packages that build and test with no Xcode project, and
-`grrclonectl` drives them from a terminal:
+The logic lives in Swift packages that build and test without Xcode, and `grrclonectl`
+drives them from a terminal:
 
 ```bash
-swift build
-swift test
+swift build && swift test
 
 .build/debug/grrclonectl doctor              # environment check
 .build/debug/grrclonectl remotes             # remotes from rclone.conf
 .build/debug/grrclonectl connect dav1 Cloud  # serve and mount
 .build/debug/grrclonectl mounts              # what it owns, and what it does not
-.build/debug/grrclonectl disconnect Cloud
-.build/debug/grrclonectl reconcile           # clean up after an unclean shutdown
 .build/debug/grrclonectl recovery-test dav1  # kill the server, verify self-repair
 ```
 
-## Documentation
+rclone 1.74.4 is the minimum, and releases bundle a pinned copy. Earlier versions have
+NFS defects that cause stale file handles, failed file creation and broken listings of
+large directories.
+
+## More
 
 - [docs/benchmarks.md](docs/benchmarks.md) — why NFS, the numbers, and the defects found
   along the way
-- [docs/progress.md](docs/progress.md) — what is done, what is next, and decisions taken
-- [CONTRIBUTING.md](CONTRIBUTING.md) — including rules that are not negotiable
+- [docs/progress.md](docs/progress.md) — what is done, what is next, decisions taken
+- [CONTRIBUTING.md](CONTRIBUTING.md) — including the rules that are not negotiable
 - [SECURITY.md](SECURITY.md)
 
 ## Prior art
 
-[Mountain Duck](https://mountainduck.io) is the app to beat, and is genuinely good.
-[macsh](https://github.com/AyonPal/macsh) is the closest open-source relative and worth
-reading. [Rclone Browser](https://github.com/kapitainsky/RcloneBrowser) was the classic
-and is no longer maintained. None of the current open-source options combine a native
-menu bar app, no third-party drivers, signed builds, and no phone-home.
+[Mountain Duck](https://mountainduck.io) is the app to beat and is genuinely good — it
+is also proprietary and paid. [macsh](https://github.com/AyonPal/macsh) is the closest
+open-source relative. [Rclone Browser](https://github.com/kapitainsky/RcloneBrowser) was
+the classic and is no longer maintained.
 
 ## Licence
 
-[MIT](LICENSE).
-
-grrclone is not affiliated with the rclone project.
+[MIT](LICENSE). grrclone is not affiliated with the rclone project.
