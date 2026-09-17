@@ -4,6 +4,16 @@ import GrrCloneCore
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
 
+    /// Measured height of the connection list. See the comment at its use site.
+    @State private var listHeight: CGFloat = 0
+
+    /// Enough for one row, so the list is never invisible even before the first
+    /// measurement arrives.
+    static let minimumListHeight: CGFloat = 44
+    /// Past this the list scrolls, so a machine with many remotes cannot produce a
+    /// menu taller than the screen.
+    static let maximumListHeight: CGFloat = 320
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -17,6 +27,18 @@ struct MenuBarView: View {
             if model.rows.isEmpty {
                 empty
             } else {
+                // Height is measured from the content, not left to the ScrollView.
+                //
+                // A ScrollView has no intrinsic content height: asked how tall it would
+                // like to be, it answers with the minimum. `maxHeight` alone therefore
+                // capped a height nothing had set, and the popover — which sizes itself
+                // to fit — collapsed to a sliver, drawing the connection rows behind the
+                // footer. The list of mounts is the entire point of this menu, so it was
+                // the one thing you could not see.
+                //
+                // Measuring keeps both behaviours: the menu is exactly as tall as it
+                // needs to be for a couple of remotes, and scrolls once there are more
+                // than fit in `maximumListHeight`.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(model.rows) { row in
@@ -24,8 +46,16 @@ struct MenuBarView: View {
                         }
                     }
                     .padding(.vertical, 6)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ListHeightKey.self,
+                                                   value: proxy.size.height)
+                        }
+                    )
                 }
-                .frame(maxHeight: 320)
+                .frame(height: min(max(listHeight, Self.minimumListHeight),
+                                   Self.maximumListHeight))
+                .onPreferenceChange(ListHeightKey.self) { listHeight = $0 }
             }
 
             if hasActivityToReport {
@@ -246,5 +276,13 @@ private struct ConnectionRow: View {
     private var isBusy: Bool {
         if case .connecting = row.state { return true }
         return false
+    }
+}
+
+/// Carries the measured height of the connection list up to the enclosing view.
+private struct ListHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

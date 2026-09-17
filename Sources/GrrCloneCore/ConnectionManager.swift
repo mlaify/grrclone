@@ -383,7 +383,28 @@ public actor ConnectionManager {
         active[mount.connection.id] = nil
         Self.removeIfEmpty(mount.mountPoint.path)
 
-        _ = try await connect(mount.connection)
+        // Remount where it was, not where the default says.
+        //
+        // This previously called `connect` with no root, which falls back to
+        // `~/grrclone`. On a machine using a configured mount folder — the whole point
+        // of that setting — a mount that went unhealthy after sleep or a network change
+        // would silently come back somewhere else. Every process holding the old path,
+        // every alias and every script would then be pointing at nothing, as the result
+        // of a repair the user never asked for and was never told about.
+        //
+        // Derived from the live mount point rather than remembered separately, so it
+        // cannot drift from where the mount actually is.
+        _ = try await connect(mount.connection,
+                              mountRoot: Self.mountRoot(containing: mount.mountPoint))
+    }
+
+    /// The folder a mount point sits in, which is the root it was mounted under.
+    ///
+    /// Each connection is mounted in a directory of its own beneath the root, so the
+    /// root is the parent. Standardised first: a path built from a `~` expansion and
+    /// one built from `/Users/...` must compare and rebuild identically.
+    static func mountRoot(containing mountPoint: URL) -> URL {
+        mountPoint.standardizedFileURL.deletingLastPathComponent()
     }
 
     /// Paths in the mount table that look like ours but are not recorded as owned.
