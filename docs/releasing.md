@@ -89,3 +89,43 @@ sees a warning.
 Sooner than the usual five years, most likely capped by the membership renewal date.
 Builds signed after it expires will not be trusted, so renew before then and update
 `MACOS_CERTIFICATE_P12` and `MACOS_SIGN_IDENTITY_SHA1`.
+
+## Homebrew, and why the app does not update itself
+
+Two updaters cannot own one app bundle, and pretending otherwise is how people end up
+downgraded.
+
+Homebrew records the version it installed. An app that replaces its own bundle makes
+that record a lie: `brew list --cask grrclone` reports the old version, and the next
+`brew upgrade` cheerfully reinstalls over the top — which downgrades anyone who had
+moved ahead, and is especially likely for someone running a pre-release.
+
+Homebrew has a stanza for apps that do update themselves, `auto_updates true`, which
+makes `brew upgrade` leave them alone unless run with `--greedy`. **grrclone's cask
+deliberately does not use it**, because grrclone genuinely does not install its own
+updates:
+
+- It can be asked to *check* GitHub for a new release. That is off by default and is
+  the only outbound connection it makes that is not to the user's own storage.
+- It never downloads or installs a new version. Doing that means verifying a signature
+  on a downloaded bundle and swapping a running app — a large attack surface to add to
+  a program that mounts your storage, and work Homebrew already does properly.
+
+So the division is clean: **Homebrew installs, grrclone informs.** The Updates tab
+detects a Homebrew installation from the Caskroom and says `brew upgrade --cask
+grrclone` instead of offering a download.
+
+### Pre-releases
+
+One cask serves one channel; there is no per-user opt-in to pre-releases within a
+cask. The Homebrew convention is a second cask with its own token — `firefox@beta`,
+`iterm2@beta` — so a pre-release channel would be `grrclone@pre`, submitted and
+versioned separately.
+
+Until that exists, a Homebrew user who turns on "Include pre-releases" is told what it
+means: the check will find release candidates, but installing one means downloading it
+from the releases page, and that replaces the copy Homebrew is tracking. The app says
+so rather than letting them discover it from a surprising `brew upgrade`.
+
+`scripts/make-cask.sh <tag>` generates the cask with the real checksum of the
+published DMG, and refuses pre-release tags for exactly this reason.

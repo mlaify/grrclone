@@ -153,6 +153,51 @@ had been written from imagination rather than from real output, so it passed. It
 uses a line captured verbatim from rclone 1.75.1, and the redaction is confirmed
 against a live daemon.
 
+### Update checks, and who owns the app bundle (2026-09-17)
+
+An opt-in check against the GitHub releases API, with a pre-release channel, and the
+Homebrew cask that goes with it.
+
+The design question was not how to check for updates but **who is allowed to install
+them**. Homebrew records the version it installed; an app that replaces its own bundle
+makes that record a lie, and the next `brew upgrade` reinstalls over the top —
+downgrading anyone who had moved ahead, which is most likely for someone running a
+pre-release. Homebrew's `auto_updates true` exists for apps that self-update, and
+grrclone's cask deliberately does not use it, because grrclone deliberately does not
+self-update.
+
+So: **Homebrew installs, grrclone informs.** The app detects a Homebrew installation
+from the Caskroom — not by running `brew`, which a GUI app may not be able to find —
+and says `brew upgrade --cask grrclone` instead of offering a download. Checking is
+still offered, because knowing a release exists costs nothing; it is installing that
+needs one owner.
+
+Pre-releases cannot come from the stable cask at all. One cask serves one channel, so
+a pre-release channel means a second cask token, the way `firefox@beta` does.
+`scripts/make-cask.sh` refuses pre-release tags rather than generating something that
+would fight the stable cask.
+
+Nothing is ever downloaded or installed by the app. Verifying a signature on a
+downloaded bundle and swapping a running app is a large attack surface to add to a
+program that mounts your storage, and it is work Homebrew already does properly.
+
+### The privacy checks were weaker than they looked
+
+Adding the first outbound connection that is not to the user's own storage meant
+reading the privacy script properly, and it had three faults.
+
+It **only scanned committed files** — `git ls-files` — so the entire update checker
+was invisible to it while being written. The one moment you most want that check to be
+honest is while writing the file it should be examining.
+
+Its download rule named `download` and `dataTask`, and the update checker uses
+`data(for:)`. It passed by using an API the rule had not heard of. The rule now matches
+the artefact rather than the call.
+
+A new rule asserting updates are off by default silently never fired, because it was
+written before being tested. All three rules were then checked by injecting the thing
+each forbids and watching them trip.
+
 ## Next
 
 Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), which is
@@ -171,16 +216,6 @@ In rough priority order.
      as a seam for this. It lands in `/Volumes` with a real eject button and no
      privileged helper, but macOS `webdavfs` stages whole files before upload and
      degrades badly on large directories, so it is a choice to offer, not a default.
-   - **Homebrew cask** ([#28](https://github.com/mlaify/grrclone/issues/28)). Releases
-     are already signed and notarised, which Homebrew requires; what remains is the
-     cask definition and a release cadence worth pointing it at.
-   - **Opt-in update checks** ([#29](https://github.com/mlaify/grrclone/issues/29)).
-     Any updater has to keep the central promise: no network traffic the user did not
-     ask for. Sparkle with `SUEnableAutomaticChecks = false`, not started until the
-     preference is enabled, and the privacy documentation and `check-privacy.sh`
-     updated honestly rather than quietly weakened to let it pass. If that cannot be
-     done cleanly, shipping no updater is the better outcome — the Homebrew cask covers
-     much of the same need with no phone-home at all.
 
 Known limitations that will not be fixed are filed too, so they can be pointed at
 rather than re-investigated: [#30](https://github.com/mlaify/grrclone/issues/30),
