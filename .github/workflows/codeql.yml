@@ -98,22 +98,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Fail loudly rather than build under Rosetta.
+          # This job runs under Rosetta, and that is CodeQL's doing, not ours.
           #
-          # This is where Rosetta showed up: CodeQL's tracer injects a dylib, and the
-          # first thing that ran under it dropped to x86_64. grrclone is Apple Silicon
-          # only by decision, and Rosetta is gone in macOS 28, so an analysis that
-          # quietly translated itself would be describing a build that will not exist.
-          # Checking both is deliberate: uname reports the process architecture, and
-          # sysctl.proc_translated is the only way to tell an arm64 process from one
-          # Rosetta is emulating.
-          ARCH="$(uname -m)"
-          TRANSLATED="$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)"
-          echo "architecture=$ARCH translated=$TRANSLATED"
-          if [ "$ARCH" != "arm64" ] || [ "$TRANSLATED" != "0" ]; then
-            echo "::error::refusing to analyse a translated or x86_64 build"
-            exit 1
-          fi
+          # The Swift extractor traces the build by injecting
+          # codeql/tools/osx64/libtrace.dylib through DYLD_INSERT_LIBRARIES. That
+          # dylib is x86_64, and injecting it translates the whole process tree:
+          # measured here as `architecture=x86_64 translated=1`. There is no way to
+          # trace a Swift build natively on a macOS runner today, so the choice is
+          # between analysing Swift and not analysing it.
+          #
+          # This is confined to analysis. ci.yml and release.yml build natively and
+          # release.yml verifies the shipped slices with lipo, so nothing translated
+          # reaches a user. What is analysed is the same source either way.
+          #
+          # Revisit when GitHub ships an arm64 Swift extractor. Rosetta is removed in
+          # macOS 28, so this will stop working for everyone, not only for us, and it
+          # is worth checking each time the CodeQL action is bumped.
+          echo "architecture=$(uname -m) translated=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)"
 
           swift build
           ( cd App && xcodegen generate >/dev/null )
@@ -122,11 +123,9 @@ jobs:
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO build
 
-          # Prove it, rather than trusting the flag.
-          BIN=build/Build/Products/Debug/grrclone.app/Contents/MacOS/grrclone
-          echo "built slices: $(lipo -archs "$BIN")"
-          [ "$(lipo -archs "$BIN")" = "arm64" ] || {
-            echo "::error::expected an arm64-only binary"; exit 1; }
+          # Architecture is asserted in ci.yml and release.yml, which build the
+          # artefact people actually run. Asserting it here would only describe the
+          # translated analysis build, which ships nowhere.
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
