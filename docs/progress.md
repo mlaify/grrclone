@@ -99,6 +99,7 @@ Do not re-litigate these without new evidence. Reasoning is in
 | rclone ≥ 1.74.4 | Earlier versions have NFS defects causing stale handles, failed file creation, broken large listings |
 | Control API on a unix socket, never TCP | Filesystem permissions; nothing reachable over the network |
 | Mount under `$HOME`, not `/Volumes` | `/Volumes` needs root to create the directory. A privileged helper is deferred |
+| The mount root is configurable | A machine migrating from a hand-rolled setup already has paths that docs, scripts and habit point at |
 | Unsandboxed, Developer ID, not App Store | Must spawn rclone and invoke `/sbin/mount` |
 | Read `rclone.conf`, never write it | People depend on it from the command line |
 | One daemon, N servers | Unified stats and teardown. Tradeoff: a crash drops all mounts, handled by reconciliation |

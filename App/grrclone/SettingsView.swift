@@ -80,18 +80,44 @@ struct SettingsView: View {
                      """)
                 .font(.caption).foregroundStyle(.secondary)
             }
-            LabeledContent("Mount folder") {
-                Text(model.mountRoot.path)
-                    .font(.caption)
-                    .textSelection(.enabled)
+            Section {
+                LabeledContent("Mount folder") {
+                    HStack {
+                        Text(model.mountRoot.path)
+                            .font(.caption).textSelection(.enabled)
+                            .lineLimit(1).truncationMode(.head)
+                        Button("Change…") { chooseMountRoot() }
+                            .controlSize(.small)
+                    }
+                }
+            } footer: {
+                Text("Each connection is mounted in a folder of its own beneath this "
+                     + "path. Changing it does not move anything already mounted; "
+                     + "disconnect and reconnect for it to take effect. grrclone never "
+                     + "unmounts anything it did not create.")
+                .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Each connection is mounted in a folder of its own beneath this path. "
-                 + "grrclone never unmounts anything it did not create.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    /// Chooses the folder connections are mounted beneath.
+    private func chooseMountRoot() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = model.mountRoot
+        panel.prompt = "Use This Folder"
+        panel.message = "Connections are mounted in folders beneath this one."
+        // The Settings window is not key while the panel is up, and an accessory app
+        // needs to be active for a panel to come forward at all.
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            model.mountRoot = url
+        }
     }
 
     private var aboutTab: some View {

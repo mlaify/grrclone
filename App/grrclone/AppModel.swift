@@ -37,7 +37,21 @@ final class AppModel: ObservableObject {
     private var manager: ConnectionManager?
     private var supervisor: DaemonSupervisor?
 
-    var mountRoot: URL { ConnectionManager.defaultMountRoot() }
+    /// Where connections are mounted. Configurable because the default is not always
+    /// right: a machine migrating from a hand-rolled setup already has established
+    /// paths, and documentation, scripts and muscle memory point at them.
+    @Published var mountRoot: URL = AppModel.loadMountRoot() {
+        didSet { UserDefaults.standard.set(mountRoot.path, forKey: Self.mountRootKey) }
+    }
+
+    private static let mountRootKey = "MountRoot"
+
+    private static func loadMountRoot() -> URL {
+        if let path = UserDefaults.standard.string(forKey: mountRootKey), !path.isEmpty {
+            return URL(fileURLWithPath: path)
+        }
+        return ConnectionManager.defaultMountRoot()
+    }
 
     // MARK: - Startup
 
@@ -121,7 +135,8 @@ final class AppModel: ObservableObject {
         Task.detached { [manager] in
             do {
                 guard let manager else { return }
-                let mount = try await manager.connect(connection)
+                let root = await MainActor.run { self.mountRoot }
+                let mount = try await manager.connect(connection, mountRoot: root)
                 await MainActor.run {
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Connected \(connection.displayName)"
