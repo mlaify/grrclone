@@ -164,3 +164,159 @@ final class InstallationKindTests: XCTestCase {
         XCTAssertEqual(InstallationKind.detect(prefixes: [root.path]), .direct)
     }
 }
+
+/// The update check is the only thing grrclone does that is influenced by a remote
+/// party. These tests treat the GitHub response as hostile, because a compromised
+/// account, a tampered reply, or simply a typo upstream should not be able to do
+/// anything worse than produce a 404.
+final class UpdateSecurityTests: XCTestCase {
+
+    // MARK: The release page URL is built, not received
+
+    /// The payload's own `html_url` must be ignored entirely. It is the only field
+    /// that could turn a bad response into an action, since the app opens it.
+    func testTheResponseCannotChooseWhichURLIsOpened() {
+        let hostile = Data(#"""
+            [{"tag_name":"v9.9.9","prerelease":false,"draft":false,
+              "html_url":"https://evil.example.com/pwn",
+              "published_at":"2026-09-17T00:00:00Z"}]
+            """#.utf8)
+
+        let update = UpdateChecker.newestUpdate(in: hostile,
+                                                current: ReleaseVersion("0.2.0")!,
+                                                includePrereleases: false)
+        XCTAssertEqual(update?.pageURL.host, "github.com",
+                       "the page URL must be constructed, never taken from the reply")
+        XCTAssertEqual(update?.pageURL.absoluteString,
+                       "https://github.com/mlaify/grrclone/releases/tag/v9.9.9")
+    }
+
+    /// A tag is attacker-influenced text that ends up in a URL path.
+    func testTagsThatCouldEscapeTheURLAreRejected() {
+        let nasty = [
+            "../../../../evil",                  // path traversal
+            "v1.0.0/../../../other/repo",        // traversal mid-tag
+            "v1.0.0?redirect=evil.example.com",  // query smuggling
+            "v1.0.0#fragment",
+            "v1.0.0 with spaces",
+            "javascript:alert(1)",
+            "https://evil.example.com",
+            "v1.0.0\nSet-Cookie: x",             // control characters
+            String(repeating: "v1.0.0", count: 50),
+        ]
+        for tag in nasty {
+            XCTAssertNil(UpdateChecker.releasePageURL(repository: "mlaify/grrclone", tag: tag),
+                         "should have rejected tag: \(tag)")
+        }
+    }
+
+    func testOrdinaryTagsAreAccepted() {
+        for tag in ["v0.2.0", "v0.2.0-rc1", "0.2.0", "v1.10.3-beta.2"] {
+            let url = UpdateChecker.releasePageURL(repository: "mlaify/grrclone", tag: tag)
+            XCTAssertNotNil(url, "should have accepted: \(tag)")
+            XCTAssertEqual(url?.scheme, "https")
+            XCTAssertEqual(url?.host, "github.com")
+        }
+    }
+
+    /// Whatever a release claims, the URL is always https to github.com.
+    func testEveryProducedURLIsHTTPSToGitHub() {
+        let data = Data(#"""
+            [{"tag_name":"v9.9.9","prerelease":false,"draft":false,
+              "html_url":"http://insecure.example.com/x"}]
+            """#.utf8)
+        let update = UpdateChecker.newestUpdate(in: data, current: ReleaseVersion("0.1.0")!,
+                                                includePrereleases: true)
+        XCTAssertEqual(update?.pageURL.scheme, "https")
+        XCTAssertFalse(update?.pageURL.absoluteString.contains("insecure") ?? true)
+    }
+
+    // MARK: The request itself
+
+    /// No cleartext, ever. A plain-http endpoint is interceptable by anyone on the
+    /// path, and App Transport Security would refuse it anyway — but the URL should
+    /// not be asking.
+    func testTheAPIEndpointIsHTTPS() {
+        let checker = UpdateChecker()
+        XCTAssertEqual(checker.releasesURL.scheme, "https")
+        XCTAssertEqual(checker.releasesURL.host, "api.github.com")
+    }
+
+    /// The host the reply must come from is pinned to a constant, so a refactor
+    /// cannot quietly widen it.
+    func testTheExpectedHostIsGitHubsAPI() {
+        XCTAssertEqual(UpdateChecker.apiHost, "api.github.com")
+    }
+
+    // MARK: Nothing is downloaded
+
+    /// The strongest guarantee here is structural: there is no code path that fetches
+    /// a binary, so there is no signature to verify and no bundle to swap. If that
+    /// ever changes, this test is the thing that should start failing.
+    func testTheCheckerContainsNoDownloadPath() throws {
+        let source = try String(contentsOfFile: #filePath
+            .replacingOccurrences(of: "Tests/GrrCloneCoreTests/UpdateCheckerTests.swift",
+                                  with: "Sources/GrrCloneCore/UpdateChecker.swift"),
+                                encoding: .utf8)
+        for forbidden in ["downloadTask", "download(for:", "download(from:",
+                          ".dmg", ".zip", "NSTask", "Process("] {
+            XCTAssertFalse(source.contains(forbidden),
+                           "the update checker must not be able to fetch or run anything: \(forbidden)")
+        }
+    }
+
+    // MARK: Parsing cannot be steered
+
+    /// A reply that claims a huge version must still be subject to the pre-release
+    /// filter: opting out of pre-releases is a safety choice, not a cosmetic one.
+    func testPrereleaseFilterCannotBeBypassedByVersionInflation() {
+        let data = Data(#"""
+            [{"tag_name":"v99.0.0","prerelease":true,"draft":false}]
+            """#.utf8)
+        XCTAssertNil(UpdateChecker.newestUpdate(in: data, current: ReleaseVersion("0.2.0")!,
+                                                includePrereleases: false))
+    }
+
+    /// Nothing in the reply should be able to make the app think it is out of date
+    /// when it is not — the version comparison is done locally on parsed numbers.
+    func testAReplyCannotForceAnUpdateWhenAlreadyCurrent() {
+        let data = Data(#"""
+            [{"tag_name":"v0.0.1","prerelease":false,"draft":false,
+              "html_url":"https://github.com/mlaify/grrclone/releases/tag/v0.0.1"}]
+            """#.utf8)
+        XCTAssertNil(UpdateChecker.newestUpdate(in: data, current: ReleaseVersion("0.2.0")!,
+                                                includePrereleases: true))
+    }
+
+    /// A response big enough to matter should not hang or crash the parser.
+    func testAVeryLargeReplyIsHandled() {
+        let entries = (0..<5000).map {
+            #"{"tag_name":"v0.0.\#($0)","prerelease":false,"draft":false}"#
+        }.joined(separator: ",")
+        let data = Data("[\(entries)]".utf8)
+        _ = UpdateChecker.newestUpdate(in: data, current: ReleaseVersion("0.2.0")!,
+                                       includePrereleases: true)
+    }
+}
+
+/// The response must be identifiable before it is believed.
+final class UpdateResponseTrustTests: XCTestCase {
+
+    /// A reply with no status or no origin is not evidence of anything. Both were
+    /// previously `if let`, which accepted the reply when the value was absent —
+    /// the opposite of what a security check should do when it cannot tell.
+    func testFailureCasesDescribeThemselvesUsefully() {
+        XCTAssertTrue(UpdateChecker.Failure.unexpectedHost("evil.example.com")
+            .errorDescription?.contains("evil.example.com") ?? false)
+        XCTAssertTrue(UpdateChecker.Failure.badResponse(403)
+            .errorDescription?.localizedCaseInsensitiveContains("rate") ?? false)
+        XCTAssertNotNil(UpdateChecker.Failure.malformed.errorDescription)
+    }
+
+    /// The host the reply must come from is a single constant, so widening it is a
+    /// visible edit rather than a scattered one.
+    func testOnlyGitHubsAPIIsAccepted() {
+        XCTAssertEqual(UpdateChecker.apiHost, "api.github.com")
+        XCTAssertEqual(UpdateChecker().releasesURL.host, UpdateChecker.apiHost)
+    }
+}

@@ -391,6 +391,13 @@ final class AppModel: ObservableObject {
     /// large attack surface to add to a program that mounts your storage, and for
     /// Homebrew users it is work Homebrew already does properly.
     func checkForUpdates() {
+        // The gate lives here, not only at the call sites.
+        //
+        // It was previously applied by each caller, and "Check Now" did not apply it,
+        // so the app would contact GitHub with the preference switched off. Three call
+        // sites and one of them already wrong is how a promise erodes: the next timer
+        // or retry path would have been the fourth.
+        guard updateChecksEnabled else { return }
         guard !updateCheckInProgress else { return }
         updateCheckInProgress = true
 
