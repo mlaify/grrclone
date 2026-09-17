@@ -15,6 +15,7 @@ func usage() -> Never {
       grrclonectl connect <remote> [name]     serve and mount a remote under ~/grrclone
       grrclonectl disconnect <name>           unmount and stop serving
       grrclonectl bwlimit [rate]              show or set the transfer limit (e.g. 10M, 1M:100k, off)
+      grrclonectl logs [level]                show recent daemon output (ERROR|NOTICE|INFO|DEBUG)
       grrclonectl reconcile                   clean up orphans from an unclean shutdown
       grrclonectl recovery-test <remote>      connect, kill the server, verify self-repair
       grrclonectl drain-test <remote>         write a large file, verify uploads are tracked
@@ -27,12 +28,12 @@ func usage() -> Never {
     exit(1)
 }
 
-func makeSupervisor() throws -> DaemonSupervisor {
+func makeSupervisor(logLevel: DaemonSettings.LogLevel = .notice) throws -> DaemonSupervisor {
     guard let binary = DaemonSupervisor.locateBinary() else {
         FileHandle.standardError.write(Data("No rclone binary found.\n".utf8))
         exit(1)
     }
-    return DaemonSupervisor(binary: binary)
+    return DaemonSupervisor(binary: binary, settings: DaemonSettings(logLevel: logLevel))
 }
 
 func makeManager() throws -> (ConnectionManager, DaemonSupervisor) {
@@ -69,6 +70,22 @@ do {
         let types = try await client.remoteTypes()
         for name in try await client.listRemotes().sorted() {
             print("\(name)\t\(types[name] ?? "?")")
+        }
+        await supervisor.stop()
+
+    case "logs":
+        let level = arguments.count > 1
+            ? (DaemonSettings.LogLevel(rawValue: arguments[1].uppercased()) ?? .notice)
+            : .notice
+        let supervisor = try makeSupervisor(logLevel: level)
+        _ = try await supervisor.start()
+        // Give the daemon a moment to say something at startup.
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        let lines = await supervisor.log.recent
+        if lines.isEmpty {
+            print("(no output)")
+        } else {
+            for line in lines { print(line.text) }
         }
         await supervisor.stop()
 

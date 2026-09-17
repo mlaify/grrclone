@@ -50,3 +50,18 @@ extension RcloneRCClient {
                          download: value["bytesPerSecondRx"]?.intValue ?? -1)
     }
 }
+
+/// Runtime options.
+extension RcloneRCClient {
+
+    /// Change how much the daemon logs, without restarting it.
+    ///
+    /// `--log-level` is a launch flag, but the same setting is reachable at runtime
+    /// through `options/set`. That distinction matters: restarting the daemon to turn
+    /// on verbose logging would unmount every volume, which is an absurd price for
+    /// looking at a log — and would very likely destroy the transient failure the user
+    /// was trying to diagnose.
+    public func setLogLevel(_ level: String) async throws {
+        _ = try await call("options/set", ["main": .object(["LogLevel": .string(level)])])
+    }
+}

@@ -43,6 +43,10 @@ final class AppModel: ObservableObject {
     /// Stored as what rclone reports rather than what was typed: `1M` comes back as
     /// `1Mi`, so keeping the typed form would show a value the daemon is not using.
     @Published private(set) var bandwidthLimit: String = ""
+    /// Recent daemon output, refreshed while the Logs tab is open.
+    @Published private(set) var logLines: [DaemonLog.Line] = []
+    @Published private(set) var logLevel: DaemonSettings.LogLevel = AppModel.loadLogLevel()
+    private static let logLevelKey = "DaemonLogLevel"
     private static let bandwidthKey = "BandwidthLimit"
     private var configPasswordStore: ConfigPasswordStore?
 
@@ -78,7 +82,8 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let supervisor = DaemonSupervisor(binary: binary)
+        let supervisor = DaemonSupervisor(
+            binary: binary, settings: DaemonSettings(logLevel: Self.loadLogLevel()))
         let manager = ConnectionManager(supervisor: supervisor, registry: registry)
         self.supervisor = supervisor
         self.manager = manager
@@ -236,6 +241,44 @@ final class AppModel: ObservableObject {
             await finishStartup()
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Logs
+
+    private static func loadLogLevel() -> DaemonSettings.LogLevel {
+        guard let raw = UserDefaults.standard.string(forKey: logLevelKey),
+              let level = DaemonSettings.LogLevel(rawValue: raw)
+        else { return .notice }
+        return level
+    }
+
+    /// Pull the latest daemon output into the published list.
+    func refreshLogs() async {
+        guard let supervisor else { return }
+        logLines = await supervisor.log.recent
+    }
+
+    /// Change verbosity on the running daemon.
+    ///
+    /// Applied through the rc API rather than by restarting: a restart would unmount
+    /// every volume, which is an absurd price for looking at a log, and would very
+    /// likely destroy the transient failure being diagnosed. The launch flag is
+    /// updated too, so the choice survives the next start.
+    func setLogLevel(_ level: DaemonSettings.LogLevel) {
+        logLevel = level
+        UserDefaults.standard.set(level.rawValue, forKey: Self.logLevelKey)
+        Task {
+            guard let supervisor, let client = try? await supervisor.requireClient() else { return }
+            do { try await client.setLogLevel(level.rawValue) }
+            catch { lastError = "Could not change the log level: \(error.localizedDescription)" }
+        }
+    }
+
+    func clearLogs() {
+        Task {
+            await supervisor?.log.clear()
+            await refreshLogs()
         }
     }
 

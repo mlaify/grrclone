@@ -94,6 +94,30 @@ way round: a typo cannot accidentally unthrottle a connection.
 Also `grrclonectl bwlimit`, and rc errors are now readable — the raw JSON body used
 to be shown verbatim, which was tolerable in a log and is not in a menu.
 
+### Log viewer (2026-09-17)
+
+Recent daemon output in a Settings tab, with the detail level changeable at runtime.
+
+It fixes a hang as much as it adds a feature. rclone's output went to a `Pipe` that
+nothing read, and a process writing to a full pipe blocks — demonstrated directly: a
+child writing 20,000 lines to an undrained pipe was still stuck five seconds later. At
+`NOTICE` that buffer takes a long time to fill, which is why it had not bitten yet, but
+a daemon having a bad day is exactly when it logs most, and freezing it takes every
+mount with it.
+
+The level is changed through `options/set` rather than by restarting. `--log-level` is
+a launch flag, but restarting the daemon to turn on verbose logging would unmount every
+volume — an absurd price for looking at a log, and a good way to destroy the transient
+failure being diagnosed.
+
+Redaction happens on the way in, so a credential is never held in memory in the clear.
+That code was wrong at first in a way worth recording: it matched `--rc-pass VALUE`, and
+rclone actually echoes `"--rc-pass" "VALUE"` with every argument quoted, so nothing
+matched and the control-socket credentials went into the log in plain text. The test
+had been written from imagination rather than from real output, so it passed. It now
+uses a line captured verbatim from rclone 1.75.1, and the redaction is confirmed
+against a live daemon.
+
 ## Next
 
 Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), which is
@@ -102,12 +126,7 @@ complete account of the project without needing GitHub open.
 
 In rough priority order.
 
-1. **Log viewer** ([#25](https://github.com/mlaify/grrclone/issues/25)), so a failed
-   mount can be diagnosed without a terminal. The daemon already logs to a pipe that
-   nothing surfaces. Care needed: log lines can carry remote paths and, at some levels,
-   credentials in URLs, so a "copy diagnostics" button is an easy way to break the
-   privacy promise by accident.
-2. **M4 — reach:**
+1. **M4 — reach:**
    - **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)),
      generated from `config/providers` and never hand-written per backend: the current
      build reports 1,147 options across all providers, so any hand-maintained form is
@@ -293,6 +312,18 @@ Recorded because each cost real time and each is easy to repeat.
 
 Newest first. One entry per working session, recording what changed and what was
 learned, so the reasoning survives even when the code moves on.
+
+### A test written from imagination proves only that the code agrees with it
+
+`DaemonLog`'s redaction was tested against an invented log line, `--rc-pass VALUE`.
+The code matched that shape, the test passed, and the real line — `"--rc-pass"
+"VALUE"`, every argument quoted — matched nothing, so the daemon's credentials were
+written to the log in clear text. The bug was found by looking at actual `DEBUG`
+output, not by testing harder.
+
+Where the input comes from something else, capture a real sample and test against
+that. This is the same lesson as the privacy checks that had never been observed to
+fail, arriving from the other direction.
 
 ### 2026-09-17 (encrypted configs) — a panic made legible
 
