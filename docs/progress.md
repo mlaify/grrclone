@@ -94,6 +94,41 @@ way round: a typo cannot accidentally unthrottle a connection.
 Also `grrclonectl bwlimit`, and rc errors are now readable — the raw JSON body used
 to be shown verbatim, which was tolerable in a log and is not in a menu.
 
+### Unclean shutdown safety (2026-09-17)
+
+An audit of the hand-rolled setup grrclone replaced raised four problems. Three
+applied here, checked against the code rather than assumed.
+
+**A mountpoint left behind by a crash accepted writes** ([#40]). Anything written to
+a connection's folder while nothing was mounted landed on the local disk, looked
+saved, and was hidden by the next mount. A clean disconnect already removed the
+folder, so the exposure was after a crash or force quit — exactly when nobody is
+watching. Mountpoints are now `0500` while unmounted. Measured: a `touch` inside
+fails, mounting over it still works, writing *through* the mount is unaffected
+because permissions come from the server, and unmounting reverts with no extra work.
+
+**Unclean shutdowns are now reported, not just repaired.** Orphaned daemons were
+already reaped and stale mounts cleared, behind a status line that scrolls away.
+That is the right amount of noise for cleanup that cost nothing, and the wrong amount
+when the user's own data may be involved. A session marker records what was mounted;
+if the next launch finds it, grrclone says so and offers to move any local files
+aside into a folder named `(recovered …)`. Moved, never merged: grrclone cannot know
+whether the local copy or the remote one is newer, and guessing overwrites the wrong
+one.
+
+**Locks are local only** ([#41]). `nolocks,locallocks` is what stops anything taking
+an `fcntl` lock hanging forever on a lock daemon rclone does not run. The cost is
+that two Macs can each hold an "exclusive" lock on the same KeePass database. There
+is no fix available — rclone's NFS server has no distributed locking — so the fix is
+saying so in connection settings, where someone keeping a vault on a remote will
+see it, instead of only in benchmarks.md.
+
+The fourth, a spinning launchd loop, does not apply: grrclone has no launchd loop. It
+is a long-running app with an `SMAppService` login item, so there is no `KeepAlive`
+restart cycle.
+
+[#40]: https://github.com/mlaify/grrclone/issues/40
+[#41]: https://github.com/mlaify/grrclone/issues/41
 ### Log viewer (2026-09-17)
 
 Recent daemon output in a Settings tab, with the detail level changeable at runtime.

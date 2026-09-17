@@ -77,6 +77,7 @@ public actor ConnectionManager {
 
         let mount = ActiveMount(connection: connection, serverID: server.id, mountPoint: mountPoint)
         active[connection.id] = mount
+        await recordLiveMounts()
         return mount
     }
 
@@ -96,6 +97,7 @@ public actor ConnectionManager {
         }
         try await registry.forget(mountPoint: mount.mountPoint.path)
         active[connectionID] = nil
+        await recordLiveMounts()
 
         Self.removeIfEmpty(mount.mountPoint.path)
     }
@@ -103,11 +105,32 @@ public actor ConnectionManager {
     /// Remove a mount point directory we created, but only when it is empty. If an
     /// unmount silently failed, the directory still shows the remote's contents and
     /// deleting it would delete the user's files.
+    /// Keep the session marker's list of live mountpoints current.
+    ///
+    /// Written after every change rather than at shutdown, because the case it exists
+    /// for is the one where shutdown never runs.
+    private func recordLiveMounts() async {
+        let paths = active.values.map(\.mountPoint.path).sorted()
+        await supervisor.session.update(mountPoints: paths)
+    }
+
+    /// Remove an empty mountpoint, or protect it if it has to stay.
+    ///
+    /// Removing it is the better outcome: a path that does not exist cannot silently
+    /// swallow a write. When it cannot be removed — it still holds something, or the
+    /// filesystem refuses — leave it unwritable rather than leaving a trap.
     static func removeIfEmpty(_ path: String) {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: path) else { return }
-        guard contents.filter({ $0 != ".DS_Store" }).isEmpty else { return }
-        try? fm.removeItem(atPath: path)
+        guard contents.filter({ $0 != ".DS_Store" }).isEmpty else {
+            try? NFSTransport.protectWhileUnmounted(URL(fileURLWithPath: path))
+            return
+        }
+        // Remove needs write permission on the directory itself.
+        try? NFSTransport.unprotect(URL(fileURLWithPath: path))
+        if (try? fm.removeItem(atPath: path)) == nil {
+            try? NFSTransport.protectWhileUnmounted(URL(fileURLWithPath: path))
+        }
     }
 
     public struct ShutdownOutcome: Sendable, Equatable {
@@ -381,6 +404,7 @@ public actor ConnectionManager {
         }
         try? await registry.forget(mountPoint: mount.mountPoint.path)
         active[mount.connection.id] = nil
+        await recordLiveMounts()
         Self.removeIfEmpty(mount.mountPoint.path)
 
         // Remount where it was, not where the default says.
