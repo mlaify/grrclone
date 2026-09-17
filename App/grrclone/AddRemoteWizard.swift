@@ -26,6 +26,12 @@ struct AddRemoteWizard: View {
     @State private var creating = false
     @State private var search = ""
 
+    // The interactive flow, for backends that ask questions rather than take a form.
+    @State private var question: RcloneRCClient.ProviderOption?
+    @State private var questionState: String?
+    @State private var answer = ""
+    @State private var waitingOnBrowser = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -33,6 +39,8 @@ struct AddRemoteWizard: View {
 
             if loading {
                 loadingView
+            } else if let question {
+                interactiveStep(question)
             } else if let provider = selected {
                 form(for: provider)
             } else {
@@ -132,13 +140,12 @@ struct AddRemoteWizard: View {
             if provider.requiresOAuth {
                 Section {
                     Label {
-                        Text("\(provider.description) signs in through a browser, which "
-                             + "grrclone cannot drive yet. Create this one with "
-                             + "`rclone config` in Terminal and it will appear here.")
+                        Text("\(provider.description) signs in through a browser. "
+                             + "grrclone will ask rclone to open it and wait while you "
+                             + "finish; you can leave the rest of this blank.")
                         .font(.caption)
                     } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
+                        Image(systemName: "safari").foregroundStyle(.secondary)
                     }
                 }
             }
@@ -228,18 +235,132 @@ struct AddRemoteWizard: View {
         }
     }
 
+    // MARK: Questions rclone asks
+
+    /// One step of rclone's interactive configuration.
+    ///
+    /// The same option schema the form uses, so the controls are the same — this is a
+    /// question at a time rather than a page of them, because each answer decides what
+    /// is asked next.
+    private func interactiveStep(_ option: RcloneRCClient.ProviderOption) -> some View {
+        Form {
+            Section {
+                if !option.help.isEmpty {
+                    Text(option.help)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            } header: {
+                Text(option.name)
+            }
+
+            Section {
+                if option.exclusive && !option.examples.isEmpty {
+                    Picker("Answer", selection: $answer) {
+                        ForEach(option.examples) { example in
+                            Text(example.help.isEmpty ? example.value : example.help)
+                                .tag(example.value)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } else if option.isPassword || option.sensitive {
+                    SecureField("Answer", text: $answer)
+                } else {
+                    TextField("Answer", text: $answer)
+                }
+            }
+
+            if waitingOnBrowser {
+                Section {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Waiting for you to finish signing in")
+                                .font(.callout.weight(.medium))
+                            // Said out loud because the call blocks for as long as the
+                            // person takes, and a window that stops responding with no
+                            // explanation reads as a hang.
+                            Text("rclone has opened your browser. This window will "
+                                 + "carry on once you have approved it there.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            if let error {
+                Section {
+                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func answerQuestion() async {
+        guard let state = questionState else { return }
+        let asked = question
+        error = nil
+        creating = true
+        // The browser step blocks until the person is done, so say so before waiting
+        // rather than after.
+        waitingOnBrowser = asked?.isBrowserSignIn ?? false
+        defer { creating = false; waitingOnBrowser = false }
+
+        do {
+            let next = try await model.continueConfiguring(name: sanitisedName,
+                                                           state: state, answer: answer)
+            await apply(next)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Move the flow on, or finish.
+    private func apply(_ step: RcloneRCClient.ConfigStep) async {
+        switch step {
+        case .finished:
+            question = nil
+            questionState = nil
+            await model.adoptNewRemotes()
+            dismiss()
+        case .question(let option, let state):
+            question = option
+            questionState = state
+            // Start from rclone's own default rather than empty, so pressing Continue
+            // does what its own config command would do.
+            answer = option.examples.first(where: { $0.value == option.defaultValue })?.value
+                ?? option.defaultValue
+        }
+    }
+
     // MARK: Finishing
 
     private var footer: some View {
         HStack {
-            Button("Cancel") { dismiss() }
+            Button("Cancel") { Task { await cancel() } }
             Spacer()
-            if creating { ProgressView().controlSize(.small) }
-            Button("Add") { Task { await create() } }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canCreate)
+            if creating && !waitingOnBrowser { ProgressView().controlSize(.small) }
+            if question != nil {
+                Button("Continue") { Task { await answerQuestion() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(creating)
+            } else {
+                Button("Add") { Task { await create() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canCreate)
+            }
         }
         .padding(12)
+    }
+
+    /// Abandoning an interactive flow leaves a half-built remote in the config, which
+    /// would then show up in the menu as something that cannot be mounted. Remove it.
+    private func cancel() async {
+        if question != nil { await model.discardRemote(named: sanitisedName) }
+        dismiss()
     }
 
     private var canCreate: Bool {
@@ -283,9 +404,17 @@ struct AddRemoteWizard: View {
         let parameters = values.filter { visible.contains($0.key) && !$0.value.isEmpty }
 
         do {
-            try await model.createRemote(name: sanitisedName, type: provider.name,
-                                         parameters: parameters)
-            dismiss()
+            if provider.requiresOAuth {
+                // These ask questions that depend on earlier answers and then hand off
+                // to a browser, which a single form cannot express.
+                await apply(try await model.beginConfiguring(name: sanitisedName,
+                                                             type: provider.name,
+                                                             parameters: parameters))
+            } else {
+                try await model.createRemote(name: sanitisedName, type: provider.name,
+                                             parameters: parameters)
+                dismiss()
+            }
         } catch {
             self.error = error.localizedDescription
         }

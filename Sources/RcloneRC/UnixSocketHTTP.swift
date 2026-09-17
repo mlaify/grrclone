@@ -63,7 +63,12 @@ public actor UnixSocketHTTP {
     }
 
     /// POST `body` to `path` and return the raw response body.
-    public func post(path: String, body: Data) async throws -> Data {
+    /// `timeoutOverride` exists for one case: an interactive config step that waits
+    /// for a person. Signing in through a browser can take minutes — finding the
+    /// password, approving on a phone — and the default watchdog would cancel the
+    /// connection underneath a flow the user is still completing.
+    public func post(path: String, body: Data,
+                     timeoutOverride: TimeInterval? = nil) async throws -> Data {
         guard FileManager.default.fileExists(atPath: socketPath) else {
             throw Failure.connectionFailed("socket \(socketPath) does not exist")
         }
@@ -76,7 +81,7 @@ public actor UnixSocketHTTP {
         // send or receive callback to fire, which is the only way to unblock a connection
         // stuck in `.waiting`. Nothing else can.
         let watchdog = DispatchWorkItem { connection.cancel() }
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout,
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + (timeoutOverride ?? timeout),
                                                             execute: watchdog)
         defer {
             watchdog.cancel()

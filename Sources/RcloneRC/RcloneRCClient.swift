@@ -18,9 +18,10 @@ public actor RcloneRCClient {
     // MARK: - Raw call
 
     @discardableResult
-    public func call(_ method: String, _ params: [String: JSONValue] = [:]) async throws -> JSONValue {
+    public func call(_ method: String, _ params: [String: JSONValue] = [:],
+                     timeout: TimeInterval? = nil) async throws -> JSONValue {
         let body = try encoder.encode(params)
-        let data = try await http.post(path: "/\(method)", body: body)
+        let data = try await http.post(path: "/\(method)", body: body, timeoutOverride: timeout)
         guard !data.isEmpty else { return .object([:]) }
         return try decoder.decode(JSONValue.self, from: data)
     }
