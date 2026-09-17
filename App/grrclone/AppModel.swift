@@ -388,6 +388,36 @@ final class AppModel: ObservableObject {
 
     func dismissUncleanShutdown() { uncleanShutdown = nil }
 
+    // MARK: - Interactive remote setup
+
+    /// Start configuring a remote that asks questions rather than taking a form.
+    func beginConfiguring(name: String, type: String,
+                          parameters: [String: String]) async throws -> RcloneRCClient.ConfigStep {
+        guard let supervisor else { throw DaemonSupervisor.Failure.notRunning }
+        return try await supervisor.requireClient()
+            .beginConfiguring(name: name, type: type, parameters: parameters)
+    }
+
+    func continueConfiguring(name: String, state: String,
+                             answer: String) async throws -> RcloneRCClient.ConfigStep {
+        guard let supervisor else { throw DaemonSupervisor.Failure.notRunning }
+        return try await supervisor.requireClient()
+            .continueConfiguring(name: name, state: state, answer: answer)
+    }
+
+    /// Pick up a remote created by the interactive flow.
+    func adoptNewRemotes() async {
+        guard let supervisor, let client = try? await supervisor.requireClient() else { return }
+        _ = try? await store.adoptNewRemotes(try await client.listRemotes())
+        await refresh()
+    }
+
+    /// Remove a remote left half-built by an abandoned flow.
+    func discardRemote(named name: String) async {
+        guard let supervisor, let client = try? await supervisor.requireClient() else { return }
+        try? await client.deleteRemote(name: name)
+    }
+
     // MARK: - Configuration encryption
 
     /// Look at the file, not the daemon.
