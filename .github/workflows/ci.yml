@@ -18,7 +18,7 @@ jobs:
     name: Build and test
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Show toolchain
         run: |
@@ -26,7 +26,7 @@ jobs:
           xcodebuild -version
 
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .build
           key: spm-${{ runner.os }}-${{ hashFiles('Package.swift') }}-${{ hashFiles('Sources/**/*.swift') }}
@@ -51,7 +51,7 @@ jobs:
     name: Build the app
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -70,7 +70,7 @@ jobs:
       # invalidated by bumping rclone and never by anything else.
       - name: Cache the bundled rclone
         id: rclone-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: App/grrclone/Resources/rclone
           key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
@@ -110,7 +110,7 @@ jobs:
     name: No phone-home
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # grrclone's central promise is that it contacts nothing but the user's own
       # storage providers. A hard failure, not a review convention. Contributors can
