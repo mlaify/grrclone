@@ -102,6 +102,12 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if !model.configIsEncryptedOnDisk {
+                Section {
+                    EncryptConfigOffer(model: model)
+                }
+            }
+
             Section {
                 BandwidthLimitField(model: model)
             } footer: {
@@ -591,5 +597,84 @@ private struct UpdatesTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+/// Offers to encrypt `rclone.conf`, and explains why that is not already the case.
+///
+/// grrclone shows a password field when adding a remote, has a keychain feature, and
+/// never connects the two out loud — so a reasonable person concludes their remote
+/// passwords are in the keychain. They are not. They are in `rclone.conf`, obscured,
+/// which `rclone reveal` undoes in one step.
+///
+/// The keychain holds exactly one thing: the password to an *encrypted* config. Until
+/// the config is encrypted, that feature guards something the user does not have, and
+/// this is the offer that closes the loop.
+private struct EncryptConfigOffer: View {
+    @ObservedObject var model: AppModel
+
+    @State private var expanded = false
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var remember = true
+    @State private var working = false
+
+    private var canEncrypt: Bool {
+        !working && password.count >= 8 && password == confirm
+    }
+
+    var body: some View {
+        Group {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your remote passwords are not encrypted")
+                        .font(.caption.weight(.medium))
+                    Text("They are stored in your rclone configuration, obscured rather "
+                         + "than encrypted — anything that can read that file can "
+                         + "recover them. Encrypting the configuration fixes that, and "
+                         + "grrclone can remember the one password that opens it.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            } icon: {
+                Image(systemName: "lock.open.fill").foregroundStyle(.orange)
+            }
+
+            if expanded {
+                SecureField("New configuration password", text: $password)
+                SecureField("Confirm", text: $confirm)
+                Toggle("Remember it in my keychain", isOn: $remember)
+
+                Text("Every other tool using rclone on this Mac will need this password "
+                     + "too, through RCLONE_CONFIG_PASS or a prompt. Mounts stay up "
+                     + "while this happens.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") { reset() }
+                    Button("Encrypt") {
+                        working = true
+                        Task {
+                            await model.encryptConfiguration(password: password,
+                                                             remember: remember)
+                            reset()
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canEncrypt)
+                }
+            } else {
+                HStack {
+                    Spacer()
+                    Button("Encrypt Configuration…") { expanded = true }
+                }
+            }
+        }
+    }
+
+    private func reset() {
+        password = ""; confirm = ""; expanded = false; working = false
     }
 }
