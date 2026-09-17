@@ -567,7 +567,9 @@ private struct UpdatesTab: View {
                         Text("Up to date, as of \(checked.formatted(date: .abbreviated, time: .shortened))")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text("Not checked").font(.caption).foregroundStyle(.secondary)
+                        Text(model.updateChecksEnabled ? "Not checked yet"
+                                                       : "Checking is off")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
 
                     Spacer()
@@ -575,8 +577,15 @@ private struct UpdatesTab: View {
                     if model.availableUpdate != nil {
                         Button("Release Notes") { model.openReleasePage() }
                     }
+                    // Disabled rather than silently doing nothing. The gate now
+                    // lives inside checkForUpdates(), so a button that looked live
+                    // and quietly returned would be worse than one that is plainly
+                    // unavailable until checking is switched on.
                     Button("Check Now") { model.checkForUpdates() }
-                        .disabled(model.updateCheckInProgress)
+                        .disabled(model.updateCheckInProgress || !model.updateChecksEnabled)
+                        .help(model.updateChecksEnabled
+                              ? "Ask GitHub whether a newer release exists"
+                              : "Turn on “Check for new releases” first")
                 }
             }
         }

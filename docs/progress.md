@@ -181,6 +181,33 @@ Nothing is ever downloaded or installed by the app. Verifying a signature on a
 downloaded bundle and swapping a running app is a large attack surface to add to a
 program that mounts your storage, and it is work Homebrew already does properly.
 
+### The security review found the check that could not fail — again
+
+A security pass over the update checker turned up three things, and the worst was in
+the assertion written to protect it.
+
+The App Transport Security check scanned `App/project.yml App/*.plist`. There is no
+plist directly under `App/` — the real one is `App/grrclone/Resources/Info.plist` — so
+the glob matched nothing and the check reported ok having audited only half of what it
+named. It had been "verified" by injecting a violation, but the injection went into
+`project.yml`, the path that worked. **Testing one input of a check is not testing the
+check.** It now names both files explicitly and fails when a file it audits is missing,
+because a check that cannot find its target knows nothing, and nothing must not read as
+fine.
+
+The opt-in gate lived at each call site rather than in `checkForUpdates()`, and "Check
+Now" did not apply it — so the app would contact GitHub with the preference switched
+off. Three call sites, one already wrong. The gate now lives in the function.
+
+Response handling used `if let` for both the origin check and the status check, which
+accepted a reply whose origin or status could not be established. Both fail closed now.
+
+The part the review found clean is the part that mattered most: the release page URL is
+built locally from the repository and tag rather than taken from the response's
+`html_url`, and the tag is constrained to characters that cannot smuggle a scheme,
+authority, traversal or query. The worst a fully hostile response can do is name a tag
+that does not exist, which is a 404.
+
 ### The privacy checks were weaker than they looked
 
 Adding the first outbound connection that is not to the user's own storage meant

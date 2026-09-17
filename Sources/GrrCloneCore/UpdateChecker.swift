@@ -97,9 +97,12 @@ public struct AvailableUpdate: Sendable, Equatable {
 /// be genuinely off by default, and the privacy check asserts that it is.
 public struct UpdateChecker: Sendable {
 
+    static let apiHost = "api.github.com"
+
     public enum Failure: Error, LocalizedError {
         case badResponse(Int)
         case malformed
+        case unexpectedHost(String)
 
         public var errorDescription: String? {
             switch self {
@@ -109,6 +112,9 @@ public struct UpdateChecker: Sendable {
                     : "GitHub returned HTTP \(code) when checking for updates."
             case .malformed:
                 return "Could not read the release list from GitHub."
+            case .unexpectedHost(let host):
+                return "The update check was answered by \(host) instead of GitHub, "
+                     + "so the reply was discarded."
             }
         }
     }
@@ -141,19 +147,58 @@ public struct UpdateChecker: Sendable {
         request.timeoutInterval = 15
 
         let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+
+        // Where the answer actually came from, after any redirects.
+        //
+        // URLSession follows redirects silently. App Transport Security already
+        // refuses a downgrade to cleartext, so this is not about interception — it is
+        // about a redirect to some other TLS host being treated as an answer from
+        // GitHub. Checking the final URL costs nothing and removes the question.
+        // Fail closed. A reply whose origin or status cannot be established is not
+        // evidence of anything, and `if let` on either would have quietly accepted it.
+        guard let final = response.url,
+              final.scheme?.lowercased() == "https",
+              final.host?.lowercased() == Self.apiHost
+        else { throw Failure.unexpectedHost(response.url?.host ?? "unknown") }
+
+        guard let http = response as? HTTPURLResponse else { throw Failure.malformed }
+        guard (200..<300).contains(http.statusCode) else {
             throw Failure.badResponse(http.statusCode)
         }
 
         return Self.newestUpdate(in: data, current: current,
-                                 includePrereleases: includePrereleases)
+                                 includePrereleases: includePrereleases,
+                                 repository: repository)
+    }
+
+    /// Build the release page URL from the repository and tag, never from the
+    /// response.
+    ///
+    /// `html_url` is in the payload and using it would be the obvious thing. It is
+    /// also the only field that could turn a hostile or tampered response into an
+    /// action: the app opens that URL in the user's browser. Constructing it locally
+    /// means the worst a bad response can do is name a tag that does not exist, which
+    /// produces a 404 rather than a visit to somewhere chosen by an attacker.
+    ///
+    /// The tag is still attacker-influenced, so it is constrained to the characters a
+    /// version tag actually uses. That stops `../`, a scheme, an authority, or a query
+    /// from being smuggled through it.
+    static func releasePageURL(repository: String, tag: String) -> URL? {
+        let allowed = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_+")
+        guard !tag.isEmpty, tag.count <= 64,
+              tag.unicodeScalars.allSatisfy({ allowed.contains($0) })
+        else { return nil }
+
+        return URL(string: "https://github.com/\(repository)/releases/tag/\(tag)")
     }
 
     /// Parsing kept separate from fetching so it can be tested against captured
     /// responses rather than against the live API.
     public static func newestUpdate(in data: Data,
                                     current: ReleaseVersion,
-                                    includePrereleases: Bool) -> AvailableUpdate? {
+                                    includePrereleases: Bool,
+                                    repository: String = "mlaify/grrclone") -> AvailableUpdate? {
         guard let releases = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return nil }
 
@@ -169,7 +214,7 @@ public struct UpdateChecker: Sendable {
 
             guard let tag = release["tag_name"] as? String,
                   let version = ReleaseVersion(tag),
-                  let page = (release["html_url"] as? String).flatMap(URL.init(string:))
+                  let page = releasePageURL(repository: repository, tag: tag)
             else { continue }
 
             // Trust the tag over the prerelease flag for ordering, but respect the flag

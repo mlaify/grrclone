@@ -124,6 +124,44 @@ check_update_host() {
 }
 check_update_host
 
+# App Transport Security must stay at its defaults.
+#
+# With no NSAppTransportSecurity key, macOS requires TLS 1.2 or better and refuses
+# cleartext outright — which is most of the answer to "can the update check be
+# intercepted". An exception added later would remove that protection silently, since
+# nothing else in the build would change and every test would still pass.
+# Named explicitly rather than globbed. The first version of this scanned
+# `App/*.plist`, which matches nothing — the file is App/grrclone/Resources/Info.plist
+# — so it examined only project.yml and reported ok regardless of what the real plist
+# said. It survived an injection test because the injection went into project.yml,
+# the path that did work. Testing one input of a check is not testing the check.
+#
+# Missing files fail rather than pass: a check that cannot find what it audits knows
+# nothing, and "nothing" must not read as "fine".
+ATS_FILES=(App/project.yml App/grrclone/Resources/Info.plist)
+
+check_ats() {
+    local missing=() hits
+    for f in "${ATS_FILES[@]}"; do
+        [[ -f "$f" ]] || missing+=("$f")
+    done
+    if (( ${#missing[@]} )); then
+        fail "App Transport Security is not weakened"
+        printf '        cannot audit, file missing: %s\n' "${missing[@]}"
+        return
+    fi
+
+    hits=$(grep -n 'NSAllowsArbitraryLoads\|NSExceptionAllowsInsecureHTTPLoads\|NSExceptionMinimumTLSVersion\|NSAppTransportSecurity' \
+             "${ATS_FILES[@]}" || true)
+    if [[ -n "$hits" ]]; then
+        fail "App Transport Security is not weakened"
+        echo "$hits" | sed 's/^/        /'
+    else
+        pass "App Transport Security is not weakened"
+    fi
+}
+check_ats
+
 echo
 if [[ $FAILED -eq 0 ]]; then
     echo "All privacy checks passed."
