@@ -32,6 +32,25 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('Package.swift') }}-${{ hashFiles('Sources/**/*.swift') }}
           restore-keys: spm-${{ runner.os }}-${{ hashFiles('Package.swift') }}-
 
+      # Some tests drive the real rclone binary — config encryption runs
+      # `rclone config encryption set` and answers its prompts. That is deliberate:
+      # the thing under test is the interaction with rclone, and a stub would test
+      # the stub.
+      #
+      # It does not violate the rule below. Those tests spawn a short-lived command;
+      # they do not start a daemon or mount anything, and the hermetic check still
+      # proves it.
+      - name: Cache the bundled rclone
+        id: rclone-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: App/grrclone/Resources/rclone
+          key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
+
+      - name: Fetch the bundled rclone
+        if: steps.rclone-cache.outputs.cache-hit != 'true'
+        run: scripts/fetch-rclone.sh
+
       # The core deliberately has no Xcode dependency, so this runs on its own.
       - name: Test the core
         run: swift test --enable-code-coverage

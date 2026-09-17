@@ -9,6 +9,19 @@ final class ConfigEncryptionTests: XCTestCase {
     private var dir: URL!
     private var config: String { dir.appendingPathComponent("rclone.conf").path }
 
+    /// The binary these tests drive.
+    ///
+    /// Absent, they skip rather than fail. The first version used `XCTUnwrap`, which
+    /// *fails* — so CI went red for want of a binary it had never been asked to fetch,
+    /// which says nothing about the code. A skip states the truth: not exercised here.
+    /// CI now fetches rclone so they do run; this is for a working copy that has not.
+    private func requireRclone() throws -> URL {
+        guard let found = rclone else {
+            throw XCTSkip("no rclone binary found; run scripts/fetch-rclone.sh to exercise these")
+        }
+        return found
+    }
+
     private var rclone: URL? {
         let candidates = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -39,7 +52,7 @@ final class ConfigEncryptionTests: XCTestCase {
     }
 
     func testEncryptingMakesTheCredentialsUnreadable() throws {
-        let rclone = try XCTUnwrap(self.rclone, "no rclone binary to test against")
+        let rclone = try requireRclone()
         try "[dav]\ntype = webdav\npass = obscuredvalue\n"
             .write(toFile: config, atomically: true, encoding: .utf8)
 
@@ -56,7 +69,7 @@ final class ConfigEncryptionTests: XCTestCase {
     /// Encrypting an already-encrypted config would prompt for the *old* password and
     /// hang on a pipe that will never answer it.
     func testRefusesToEncryptTwice() throws {
-        let rclone = try XCTUnwrap(self.rclone, "no rclone binary to test against")
+        let rclone = try requireRclone()
         try ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "first")
 
         XCTAssertThrowsError(
@@ -72,7 +85,7 @@ final class ConfigEncryptionTests: XCTestCase {
     /// readable would have the user believe they are protected when they are not. The
     /// check is on the file, not the exit status.
     func testSuccessIsDecidedByTheFileNotTheExitStatus() throws {
-        let rclone = try XCTUnwrap(self.rclone, "no rclone binary to test against")
+        let rclone = try requireRclone()
         try ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "pw")
         XCTAssertTrue(ConfigEncryption.isEncrypted(configPath: config))
 
