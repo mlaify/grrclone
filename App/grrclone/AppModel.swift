@@ -518,6 +518,92 @@ final class AppModel: ObservableObject {
         status = "Added \(name)"
     }
 
+    // MARK: - Deleting a remote
+
+    /// The remote the delete sheet is confirming, if it is open.
+    @Published var deletingConnection: Connection?
+    /// What the cache says is still waiting to upload, for the sheet to show.
+    @Published private(set) var deletionPending: PendingUploads?
+
+    /// Open the confirmation, and look at the cache while it opens.
+    ///
+    /// The obstacle is discovered before the user commits rather than after. Making
+    /// someone type a remote's name and *then* telling them it cannot be deleted is a
+    /// worse experience than showing them the unsent files up front.
+    func beginDeleting(_ connection: Connection) {
+        deletingConnection = connection
+        deletionPending = nil
+        Task {
+            guard let manager else { return }
+            let pending = await manager.pendingUploads(for: connection)
+            if deletingConnection?.id == connection.id { deletionPending = pending }
+        }
+    }
+
+    func cancelDeleting() {
+        deletingConnection = nil
+        deletionPending = nil
+    }
+
+    /// Delete the remote, then forget grrclone's own record of it.
+    ///
+    /// The store is updated only after rclone's configuration is, so a failure part
+    /// way through leaves a connection pointing at a remote that still exists rather
+    /// than a remote with nothing pointing at it.
+    /// Returns true only when the remote is really gone, so the sheet knows whether
+    /// to close. Dismissing regardless would hide the reason: `lastError` renders in
+    /// the menu bar, not in Settings, so a failed deletion would look like a silent
+    /// no-op from where the user is standing.
+    @discardableResult
+    func confirmDelete(_ connection: Connection,
+                       discardPendingUploads: Bool = false) async -> Bool {
+        guard let manager else { return false }
+
+        // Same trap as #79: `configPath` is populated by a refresh that returns early
+        // on several paths, and an empty one would send the backup at nothing.
+        await refreshConfigEncryptionState()
+        guard !configPath.isEmpty else {
+            lastError = "grrclone could not determine where your rclone configuration "
+                      + "lives, so it will not delete anything from it."
+            return false
+        }
+
+        status = "Deleting \(connection.displayName)"
+        do {
+            let outcome = try await manager.deleteRemote(connection,
+                                                         configPath: configPath,
+                                                         force: discardPendingUploads)
+            needsRemount.remove(connection.id)
+
+            // The remote is gone from rclone's configuration by this point, so the
+            // deletion has succeeded whatever happens next. But a store write that
+            // failed silently would leave a connection pointing at a remote that no
+            // longer exists — it survives in memory, disappears on the next launch,
+            // and reappears if the file is ever re-read. Say so rather than reporting
+            // an unqualified success.
+            var storeWarning = ""
+            do {
+                try await store.remove(id: connection.id)
+            } catch {
+                storeWarning = " grrclone could not update its own list of connections, "
+                             + "so \(connection.displayName) may reappear until you "
+                             + "restart: \(error.localizedDescription)"
+                lastError = storeWarning.trimmingCharacters(in: .whitespaces)
+            }
+
+            cancelDeleting()
+            await refresh()
+            status = "Deleted \(connection.displayName). "
+                   + "Configuration backed up to \(outcome.backup.lastPathComponent)."
+                   + storeWarning
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            status = "Ready"
+            return false
+        }
+    }
+
     // MARK: - Updates
 
     /// Ask GitHub whether a newer release exists.
