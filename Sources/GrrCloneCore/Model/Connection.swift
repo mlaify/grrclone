@@ -29,6 +29,52 @@ public struct Connection: Codable, Sendable, Identifiable, Equatable {
     public var fsSpec: String {
         path.isEmpty ? "\(remote):" : "\(remote):\(path)"
     }
+
+    // MARK: - Validation
+
+    /// Keep a connection name usable as a single folder name.
+    ///
+    /// The name *is* the folder the remote is mounted in, so a separator in it creates
+    /// nested directories — and then the mount point no longer has the shape the rest
+    /// of the code assumes, which is how a repair could put a volume back one level
+    /// deeper than it found it. Neither `.` nor `..` is a usable folder either.
+    ///
+    /// Replaced rather than rejected, and the caller shows the result, so the user
+    /// sees what was saved instead of being told off.
+    public static func sanitisedName(_ raw: String, fallback: String) -> String {
+        let cleaned = raw
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty || cleaned == "." || cleaned == ".." { return fallback }
+        return cleaned
+    }
+
+    /// Keep a subpath usable as the right-hand side of `remote:path`.
+    ///
+    /// rclone takes everything after the colon literally:
+    ///
+    /// - A **colon** is removed. `remote:a:b` parses as a *different remote*, so this
+    ///   is the one case here that changes what gets mounted rather than merely
+    ///   looking untidy.
+    /// - A **leading slash** is removed. `remote:/folder` is an absolute path, which
+    ///   some backends accept and others reject outright.
+    /// - A **trailing slash** is removed, so the preview does not read `remote:x/`,
+    ///   which looks like a mistake.
+    /// - `..` components are dropped. They mean nothing to rclone, which does not
+    ///   resolve them, so a path containing one silently points at a directory that
+    ///   does not exist.
+    ///
+    /// Trimmed rather than refused: none of these are worth rejecting the input over,
+    /// and the caller shows what was actually saved.
+    public static func sanitisedPath(_ raw: String) -> String {
+        let components = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ":", with: "")
+            .split(separator: "/")
+            .filter { $0 != "." && $0 != ".." }
+        return components.joined(separator: "/")
+    }
 }
 
 public enum TransportKind: String, Codable, Sendable, CaseIterable {

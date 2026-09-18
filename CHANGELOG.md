@@ -11,6 +11,12 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Added
+
+- **Mount one folder of a remote** instead of all of it, from the connection's page in
+  Settings. Leave it empty for the whole remote.
+  ([#82](https://github.com/mlaify/grrclone/issues/82))
+
 ## [0.4.0] - 2026-09-18
 
 ### Added
