@@ -16,6 +16,8 @@ struct DeleteRemoteSheet: View {
     @State private var typedName = ""
     @State private var acknowledgedPending = false
     @State private var working = false
+    /// Shown in the sheet itself, because that is where the user is looking.
+    @State private var failure: String?
 
     private var pending: PendingUploads? { model.deletionPending }
     private var stillChecking: Bool { pending == nil }
@@ -60,6 +62,19 @@ struct DeleteRemoteSheet: View {
 
             pendingSection
 
+            if let failure {
+                Label {
+                    Text(failure)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            }
+
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
@@ -86,10 +101,15 @@ struct DeleteRemoteSheet: View {
                 Button("Delete Remote", role: .destructive) {
                     working = true
                     Task {
-                        await model.confirmDelete(connection,
-                                                  discardPendingUploads: acknowledgedPending)
+                        // Close only on success. A refusal — an upload that started
+                        // while this sheet was open, a volume that would not
+                        // disconnect — reports through `lastError`, which renders in
+                        // the menu bar and not here. Dismissing anyway would look
+                        // like the button did nothing.
+                        let deleted = await model.confirmDelete(
+                            connection, discardPendingUploads: acknowledgedPending)
                         working = false
-                        dismiss()
+                        if deleted { dismiss() } else { failure = model.lastError }
                     }
                 }
                 .disabled(!canDelete)

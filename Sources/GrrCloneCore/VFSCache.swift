@@ -78,9 +78,13 @@ public enum VFSCache {
             return PendingUploads(inspectionFailed: true)
         }
 
+        // No `.skipsHiddenFiles`. A remote's dotfiles are ordinary files — `.env`,
+        // anything under `.git/` — and their metadata lives under a matching dotted
+        // path here. Skipping them would report a cache as safe while a dirty
+        // `.env` sat in it, and purge the only copy.
         guard let walker = fileManager.enumerator(at: root,
                                                   includingPropertiesForKeys: [.isRegularFileKey],
-                                                  options: [.skipsHiddenFiles]) else {
+                                                  options: []) else {
             return PendingUploads(inspectionFailed: true)
         }
 

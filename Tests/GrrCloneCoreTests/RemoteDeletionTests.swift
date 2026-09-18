@@ -77,6 +77,28 @@ final class RemoteDeletionTests: XCTestCase {
         XCTAssertFalse(pending.isSafeToDiscard)
     }
 
+    /// Dotfiles are ordinary files on a remote, and their cache metadata lives under
+    /// a matching dotted path. An enumerator with `.skipsHiddenFiles` walked straight
+    /// past them, so a dirty `.env` reported the cache as safe to purge.
+    func testDirtyDotfilesAreNotSkipped() throws {
+        try writeMeta(fs: "dav1:", path: "visible.txt", dirty: false)
+        try writeMeta(fs: "dav1:", path: ".env", dirty: true)
+
+        let pending = VFSCache.pendingUploads(cacheRoot: cacheRoot, fsSpec: "dav1:")
+
+        XCTAssertEqual(pending.dirtyFiles, [".env"])
+        XCTAssertFalse(pending.isSafeToDiscard)
+    }
+
+    /// The same for anything beneath a dot-directory, which is the `.git/` case.
+    func testDirtyFilesInsideDotDirectoriesAreNotSkipped() throws {
+        try writeMeta(fs: "dav1:", path: ".git/config", dirty: true)
+
+        let pending = VFSCache.pendingUploads(cacheRoot: cacheRoot, fsSpec: "dav1:")
+
+        XCTAssertEqual(pending.dirtyFiles, [".git/config"])
+    }
+
     /// One remote's cache must not answer for another's.
     func testCachesAreScopedPerRemote() throws {
         try writeMeta(fs: "dav1:", path: "pending.txt", dirty: true)

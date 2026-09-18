@@ -397,6 +397,25 @@ public actor ConnectionManager {
                 throw DeletionRefusal.stillMounted(path)
             }
             unmounted = path
+
+            // Scan again now the volume is down.
+            //
+            // The first scan happened while the mount was live, so a write could land
+            // between it and the unmount and be dirty by the time we get here — and
+            // the purge below would then delete its only copy. Nothing can write to
+            // the remote any more at this point, so this answer is the one that holds.
+            //
+            // Aborting here is safe and leaves the user better off than proceeding:
+            // the remote is still configured and its cache is untouched, so the write
+            // survives and reconnecting will upload it. Only the mount was lost.
+            if !force {
+                let after = VFSCache.pendingUploads(cacheRoot: cacheRoot,
+                                                    fsSpec: connection.fsSpec)
+                if after.inspectionFailed { throw DeletionRefusal.cacheUnreadable }
+                if !after.dirtyFiles.isEmpty {
+                    throw DeletionRefusal.pendingUploads(files: after.dirtyFiles)
+                }
+            }
         }
 
         let backup = try ConfigBackup.make(configPath: configPath)
