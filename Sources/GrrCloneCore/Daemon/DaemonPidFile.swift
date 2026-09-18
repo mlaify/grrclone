@@ -46,10 +46,16 @@ public struct DaemonPidFile: Sendable {
         return try? decoder.decode(Record.self, from: data)
     }
 
-    /// Terminate a previously recorded daemon if, and only if, it is provably still ours.
-    /// Returns the PID reaped, or nil if there was nothing to reap.
-    @discardableResult
-    public func reapOrphan() async -> Int32? {
+    /// The recorded daemon, if it is provably still ours and therefore safe to kill.
+    ///
+    /// Split from the kill itself so a caller can act in between. That gap is not a
+    /// convenience: an orphaned daemon is still serving live NFS mounts, and killing
+    /// it before those come down leaves the kernel talking to a dead server. See
+    /// `DaemonSupervisor.orphanCleanup`.
+    ///
+    /// A record that does not identify a live daemon of ours is cleared as stale and
+    /// nil returned, so callers cannot act on it.
+    public func reapableOrphan() async -> Record? {
         guard let record = read() else { return nil }
 
         guard await Self.isOurDaemon(pid: record.pid, socketPath: record.socketPath) else {
@@ -58,7 +64,15 @@ public struct DaemonPidFile: Sendable {
             clear()
             return nil
         }
+        return record
+    }
 
+    /// Terminate a daemon already confirmed by `reapableOrphan()`.
+    ///
+    /// Takes the record rather than re-reading, so the process killed is the one that
+    /// was identified and not whatever the PID refers to by the time we get here.
+    @discardableResult
+    public func reap(_ record: Record) async -> Int32 {
         kill(record.pid, SIGTERM)
         for _ in 0..<20 {
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -69,6 +83,17 @@ public struct DaemonPidFile: Sendable {
         clear()
         try? FileManager.default.removeItem(atPath: record.socketPath)
         return record.pid
+    }
+
+    /// Identify and terminate in one step, with nothing in between.
+    ///
+    /// Only for callers that own no mounts. Anything that might have mounts served by
+    /// this daemon must use `reapableOrphan()` and `reap(_:)` with an unmount between
+    /// them.
+    @discardableResult
+    public func reapOrphan() async -> Int32? {
+        guard let record = await reapableOrphan() else { return nil }
+        return await reap(record)
     }
 
     /// True only if the PID is live, is an rclone process, and its command line names the

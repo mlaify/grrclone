@@ -36,10 +36,14 @@ func makeSupervisor(logLevel: DaemonSettings.LogLevel = .notice) throws -> Daemo
     return DaemonSupervisor(binary: binary, settings: DaemonSettings(logLevel: logLevel))
 }
 
-func makeManager() throws -> (ConnectionManager, DaemonSupervisor) {
+func makeManager() async throws -> (ConnectionManager, DaemonSupervisor) {
     let supervisor = try makeSupervisor()
     let registry = MountRegistry(fileURL: MountRegistry.defaultURL())
-    return (ConnectionManager(supervisor: supervisor, registry: registry), supervisor)
+    let manager = ConnectionManager(supervisor: supervisor, registry: registry)
+    // Bring our mounts down before the supervisor kills a leftover daemon. Wired in
+    // the factory so no subcommand can forget it.
+    await manager.installOrphanCleanup()
+    return (manager, supervisor)
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -123,7 +127,7 @@ do {
             let live = await SystemMounts.isMounted(entry.mountPoint)
             print("  \(entry.mountPoint)  [\(entry.transport)]  \(live ? "mounted" : "stale record")")
         }
-        let (manager, _) = try makeManager()
+        let (manager, _) = try await makeManager()
         let foreign = await manager.foreignLookalikes()
         print("\nLoopback NFS mounts grrclone does NOT own (\(foreign.count)):")
         if foreign.isEmpty { print("  none") }
@@ -133,7 +137,7 @@ do {
         guard arguments.count >= 2 else { usage() }
         let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
         let name = arguments.count >= 3 ? arguments[2] : remote
-        let (manager, _) = try makeManager()
+        let (manager, _) = try await makeManager()
         let connection = Connection(remote: remote, displayName: name)
         print("Serving \(connection.fsSpec) and mounting...")
         let mount = try await manager.connect(connection)
@@ -158,7 +162,7 @@ do {
         print("Note: its rclone server exits with the daemon that started it.")
 
     case "reconcile":
-        let (manager, supervisor) = try makeManager()
+        let (manager, supervisor) = try await makeManager()
         let report = try await manager.reconcileOrphans()
         print("cleaned:      \(report.cleaned.isEmpty ? "none" : report.cleaned.joined(separator: ", "))")
         print("still stuck:  \(report.stillMounted.isEmpty ? "none" : report.stillMounted.joined(separator: ", "))")
@@ -171,7 +175,7 @@ do {
         // server has died must be detected and rebuilt, not left hanging Finder.
         guard arguments.count >= 2 else { usage() }
         let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
-        let (manager, supervisor) = try makeManager()
+        let (manager, supervisor) = try await makeManager()
         let connection = Connection(remote: remote, displayName: "recovery-test")
 
         print("1. connecting…")
@@ -228,7 +232,7 @@ do {
         // actually reached the provider, and shutdown must wait for it.
         guard arguments.count >= 2 else { usage() }
         let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
-        let (manager, _) = try makeManager()
+        let (manager, _) = try await makeManager()
         let connection = Connection(remote: remote, displayName: "drain-test")
 
         print("1. connecting…")
@@ -267,7 +271,7 @@ do {
         // at the moment it is least warranted. This asserts we report unknown instead.
         guard arguments.count >= 2 else { usage() }
         let remote = arguments[1].hasSuffix(":") ? String(arguments[1].dropLast()) : arguments[1]
-        let (manager, supervisor) = try makeManager()
+        let (manager, supervisor) = try await makeManager()
         let connection = Connection(remote: remote, displayName: "quit-safety-test")
         var failures: [String] = []
 

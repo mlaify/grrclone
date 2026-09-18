@@ -126,6 +126,11 @@ final class AppModel: ObservableObject {
         self.supervisor = supervisor
         self.manager = manager
 
+        // Before anything starts: teach the supervisor to bring our mounts down before
+        // it kills a daemon left over from an unclean shutdown. Killing it first leaves
+        // the kernel talking to a dead NFS server.
+        await manager.installOrphanCleanup()
+
         do {
             let client = try await supervisor.start()
 

@@ -110,11 +110,24 @@ public actor DaemonSupervisor {
         previousSession = session.previousSession()
         session.begin()
 
-        // Reap a daemon left behind by an unclean shutdown before claiming the socket.
-        // Skipping this would orphan it: we would delete the socket it is listening on,
-        // leaving a live process still serving mounts that nothing can reach or stop.
-        if let reaped = await pidFile.reapOrphan() {
-            reapedOrphanPID = reaped
+        // Deal with a daemon left behind by an unclean shutdown before claiming the
+        // socket. Skipping this would orphan it: we would delete the socket it is
+        // listening on, leaving a live process still serving mounts that nothing can
+        // reach or stop.
+        //
+        // **Unmount before killing.** That orphan is still serving live NFS mounts, and
+        // killing it first leaves the kernel talking to a dead server — the exact state
+        // `stop()` and `ConnectionManager.shutdown()` go out of their way to avoid.
+        // Soft mounts turn that into I/O errors rather than a permanent wedge, which is
+        // why it went unnoticed, but errors in Finder and failed in-flight writes are
+        // not an acceptable startup experience.
+        //
+        // The cleanup is injected because the registry of owned mounts belongs a layer
+        // up. It runs only when an orphan is actually found, so the ordinary launch
+        // pays nothing for it.
+        if let orphan = await pidFile.reapableOrphan() {
+            orphanMountsUnmounted = await orphanCleanup?() ?? []
+            reapedOrphanPID = await pidFile.reap(orphan)
         }
 
         // A unix socket path is capped at 104 bytes on Darwin, so keep the name short.
@@ -186,11 +199,20 @@ public actor DaemonSupervisor {
         // guarantee does not depend on the umask in effect at launch.
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: socket)
 
+        // Everything past this point can throw, and a throw that leaves the process
+        // running orphans it beyond recovery: the pid file is written only on success,
+        // so the *next* launch cannot identify it either, and a caller that retries
+        // start() spawns a second daemon on top of the first.
+        //
+        // This previously guarded only the version-too-old case. A version() call that
+        // threw for any other reason — the socket file exists but the daemon is not
+        // answering yet, a malformed reply — skipped the cleanup entirely.
+        var startedCleanly = false
+        defer { if !startedCleanly { abandonPartialStart([errPipe, outPipe], socket: socket) } }
+
         let client = RcloneRCClient(socketPath: socket, user: user, password: password)
         let version = try await client.version()
         guard version.meetsMinimum else {
-            process.terminate()
-            self.process = nil
             let minimum = RcloneRCClient.Version.minimumSupported
             throw Failure.binaryTooOld(found: version.version,
                                        minimum: "\(minimum.0).\(minimum.1).\(minimum.2)")
@@ -199,12 +221,51 @@ public actor DaemonSupervisor {
         try? pidFile.write(pid: process.processIdentifier, socketPath: socket)
         self.client = client
         self.socketPath = socket
+        startedCleanly = true
         return client
+    }
+
+    /// Tear down a start that did not complete, leaving nothing running.
+    ///
+    /// Synchronous on purpose: it runs from a `defer` on the throwing path, and an
+    /// async hop there would let the error escape before the process is gone.
+    /// `terminate()` then a SIGKILL backstop is the same escalation `stop()` uses,
+    /// minus the wait — there is no client to ask politely with.
+    private func abandonPartialStart(_ pipes: [Pipe], socket: String) {
+        if let process, process.isRunning {
+            process.terminate()
+            // rclone has not begun serving anything at this point, so there is no
+            // mount to protect and no reason to wait for a graceful exit.
+            kill(process.processIdentifier, SIGKILL)
+        }
+        Self.stopDraining(pipes)
+        self.pipes = []
+        self.process = nil
+        self.client = nil
+        self.socketPath = nil
+        pidFile.clear()
+        try? FileManager.default.removeItem(atPath: socket)
     }
 
     /// PID of a daemon reaped at startup, if any. Surfaced so callers can report that a
     /// previous run did not shut down cleanly.
     private(set) public var reapedOrphanPID: Int32?
+
+    /// Mountpoints brought down by `orphanCleanup` before the orphan was killed.
+    /// Empty on an ordinary launch, because the hook only runs when an orphan exists.
+    private(set) public var orphanMountsUnmounted: [String] = []
+
+    /// Brings down the mounts an orphaned daemon is serving, before it is killed.
+    ///
+    /// Returns the mountpoints it unmounted, for reporting. Set this on every
+    /// supervisor that might have mounts behind it; a supervisor without it will kill
+    /// an orphan out from under live mounts, which is what this exists to prevent.
+    public typealias OrphanCleanup = @Sendable () async -> [String]
+    private var orphanCleanup: OrphanCleanup?
+
+    public func setOrphanCleanup(_ cleanup: @escaping OrphanCleanup) {
+        self.orphanCleanup = cleanup
+    }
 
     /// The previous session's record when it did not shut down cleanly, else nil.
     private(set) public var previousSession: SessionMarker.Record?

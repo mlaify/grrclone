@@ -26,6 +26,33 @@ public actor ConnectionManager {
         self.transports = Dictionary(uniqueKeysWithValues: transports.map { ($0.kind, $0) })
     }
 
+    /// Teach the supervisor to bring our mounts down before it kills an orphaned
+    /// daemon.
+    ///
+    /// Call once, after construction and before the first `start()`. Without it the
+    /// supervisor kills the orphan out from under live mounts and the kernel is left
+    /// talking to a dead NFS server. It is wired here rather than left to each caller
+    /// because `start()` is reached from a dozen places and one missed call site
+    /// reintroduces the bug silently.
+    ///
+    /// Weak so the supervisor holding this closure does not keep the manager alive.
+    public func installOrphanCleanup() async {
+        await supervisor.setOrphanCleanup { [weak self] in
+            guard let self else { return [] }
+            return await self.unmountRecordedMounts()
+        }
+    }
+
+    /// Unmount every mount the registry records as ours and is still in the mount
+    /// table. Returns the paths brought down.
+    ///
+    /// Used both by startup reconciliation and, crucially, as the orphan cleanup that
+    /// runs before a leftover daemon is killed. Needs no daemon of its own: ownership
+    /// comes from the registry and the unmount goes through `diskutil`.
+    public func unmountRecordedMounts() async -> [String] {
+        (try? await reconcileOrphans().cleaned) ?? []
+    }
+
     public static func defaultCacheRoot() -> URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("org.mlaify.grrclone", isDirectory: true)
