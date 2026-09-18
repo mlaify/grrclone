@@ -113,6 +113,55 @@ public enum VFSCache {
         return PendingUploads(dirtyFiles: dirty.sorted(), inspectionFailed: failed)
     }
 
+    /// How much disk a remote's cache is using, and what it owes the provider.
+    public struct Usage: Sendable, Equatable {
+        public var bytes: Int64
+        public var fileCount: Int
+        public var pending: PendingUploads
+
+        public init(bytes: Int64 = 0, fileCount: Int = 0,
+                    pending: PendingUploads = PendingUploads()) {
+            self.bytes = bytes
+            self.fileCount = fileCount
+            self.pending = pending
+        }
+
+        /// Safe to reclaim only when nothing is waiting to upload *and* the cache
+        /// could be read. A dirty entry is the only copy of that file.
+        public var isSafeToPurge: Bool { pending.isSafeToDiscard }
+    }
+
+    /// Measure a remote's cache.
+    ///
+    /// Sizes come from `.totalFileAllocatedSize` where the filesystem reports it,
+    /// falling back to `.fileSize`. The difference matters for a cache: rclone
+    /// preallocates sparse files for partial downloads, so the logical size of a
+    /// half-fetched 4 GB video is 4 GB while the space actually reclaimable by
+    /// deleting it is whatever has been written. Reporting the logical size would
+    /// promise the user disk space that purging will not give back.
+    public static func usage(cacheRoot: URL, fsSpec: String,
+                             fileManager: FileManager = .default) -> Usage {
+        let pending = pendingUploads(cacheRoot: cacheRoot, fsSpec: fsSpec,
+                                     fileManager: fileManager)
+        var usage = Usage(pending: pending)
+
+        let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey]
+        for root in [dataDirectory(cacheRoot: cacheRoot, fsSpec: fsSpec),
+                     metadataDirectory(cacheRoot: cacheRoot, fsSpec: fsSpec)] {
+            guard fileManager.fileExists(atPath: root.path),
+                  let walker = fileManager.enumerator(at: root,
+                                                      includingPropertiesForKeys: keys,
+                                                      options: []) else { continue }
+            for case let url as URL in walker {
+                guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                      values.isRegularFile == true else { continue }
+                usage.bytes += Int64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)
+                usage.fileCount += 1
+            }
+        }
+        return usage
+    }
+
     /// Remove a remote's cached data and metadata.
     ///
     /// Callers must have established that nothing is pending. This deletes the only

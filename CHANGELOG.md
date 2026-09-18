@@ -16,6 +16,11 @@ thing was built the way it was, and what was tried and rejected — lives in
 - **Mount one folder of a remote** instead of all of it, from the connection's page in
   Settings. Leave it empty for the whole remote.
   ([#82](https://github.com/mlaify/grrclone/issues/82))
+- **A Cache tab in Settings**, showing how much disk each remote's cache is using and
+  offering to clear it. Clearing is refused while the remote is connected, while
+  anything is still uploading, or when the cache cannot be read — a file that has not
+  reached the provider exists only there.
+  ([#84](https://github.com/mlaify/grrclone/issues/84))
 
 ## [0.4.0] - 2026-09-18
 

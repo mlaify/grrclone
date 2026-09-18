@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("Connections", systemImage: "externaldrive") }
             generalTab
                 .tabItem { Label("General", systemImage: "gear") }
+            CacheTab(model: model)
+                .tabItem { Label("Cache", systemImage: "internaldrive") }
             LogsTab(model: model)
                 .tabItem { Label("Logs", systemImage: "doc.plaintext") }
             UpdatesTab(model: model)
