@@ -70,6 +70,16 @@ private struct CacheRow: View {
     /// should act on them. Nil means it can.
     private var obstacle: String? {
         if row.state.isMounted { return "Disconnect it first" }
+        // A cache is named from `fsSpec`, so two connections pointing at the same
+        // remote and folder share one. Offering to clear this one while its twin is
+        // mounted would delete files rclone is reading from.
+        if let twin = model.rows.first(where: {
+            $0.id != row.id
+                && $0.connection.fsSpec == row.connection.fsSpec
+                && $0.state.isMounted
+        }) {
+            return "Shared with \(twin.connection.displayName), which is connected"
+        }
         guard let usage else { return "Not measured yet" }
         if usage.pending.inspectionFailed { return "Could not be read" }
         if !usage.pending.dirtyFiles.isEmpty {

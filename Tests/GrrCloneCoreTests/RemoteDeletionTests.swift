@@ -256,4 +256,25 @@ final class RemoteDeletionTests: XCTestCase {
         XCTAssertLessThan(usage.bytes, 1 << 30,
                           "a sparse file must not be reported at its logical size")
     }
+    /// Two connections pointing at the same remote and folder share one cache,
+    /// because the cache directory is named from `fsSpec`. Clearing must be scoped
+    /// to that, not to a connection id.
+    func testTwoConnectionsWithTheSameFsSpecShareACacheDirectory() {
+        let a = Connection(remote: "dav1", path: "photos", displayName: "Photos")
+        let b = Connection(remote: "dav1", path: "photos", displayName: "Photos Again")
+
+        XCTAssertNotEqual(a.id, b.id, "different connections")
+        XCTAssertEqual(a.fsSpec, b.fsSpec, "but the same filesystem")
+        XCTAssertEqual(VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: a.fsSpec),
+                       VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: b.fsSpec),
+                       "and therefore the same cache, which a UUID check would miss")
+    }
+
+    /// A differing subpath means a different cache, so they do not interfere.
+    func testDifferentSubpathsDoNotShareACache() {
+        let a = Connection(remote: "dav1", path: "photos")
+        let b = Connection(remote: "dav1", path: "documents")
+        XCTAssertNotEqual(VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: a.fsSpec),
+                          VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: b.fsSpec))
+    }
 }

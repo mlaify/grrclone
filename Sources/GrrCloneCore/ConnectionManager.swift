@@ -16,6 +16,15 @@ public actor ConnectionManager {
     private let transports: [TransportKind: any MountTransport]
     private var active: [UUID: ActiveMount] = [:]
 
+    /// Filesystems with a mount in progress.
+    ///
+    /// Keyed by `fsSpec`, not by connection id, and tracked separately from `active`
+    /// because `connect` records into `active` only *after* `serve/start` and the
+    /// mount have both returned. Between those points a connection is serving files
+    /// and appears in neither place, which is long enough for something else to
+    /// decide its cache is idle.
+    private var connecting: Set<String> = []
+
     public init(supervisor: DaemonSupervisor,
                 registry: MountRegistry,
                 cacheRoot: URL? = nil,
@@ -111,6 +120,10 @@ public actor ConnectionManager {
         }
 
         let client = try await supervisor.start()
+
+        connecting.insert(connection.fsSpec)
+        defer { connecting.remove(connection.fsSpec) }
+
         let root = mountRoot ?? Self.defaultMountRoot()
         let mountPoint = root.appendingPathComponent(connection.displayName, isDirectory: true)
 
@@ -313,7 +326,9 @@ public actor ConnectionManager {
             case .stillMounted:
                 return "Disconnect this remote before clearing its cache. rclone is "
                      + "serving files from it, and deleting them underneath a live "
-                     + "mount produces read errors in Finder."
+                     + "mount produces read errors in Finder. If another connection "
+                     + "points at the same remote and folder, they share one cache, "
+                     + "so that one has to be disconnected too."
             }
         }
     }
@@ -334,6 +349,20 @@ public actor ConnectionManager {
         return result
     }
 
+    /// Whether anything is serving this filesystem right now.
+    ///
+    /// By `fsSpec`, never by connection id. The cache directory is named from
+    /// `fsSpec`, so two stored connections pointing at the same remote and subpath
+    /// — the same remote added twice, or one connection duplicated to mount it
+    /// somewhere else — share one cache. Checking the id alone would let a
+    /// disconnected connection clear the cache its mounted twin is reading from.
+    ///
+    /// Includes mounts still being established, which are in neither `active` nor
+    /// the mount table yet.
+    func isServing(fsSpec: String) -> Bool {
+        active.values.contains { $0.connection.fsSpec == fsSpec } || connecting.contains(fsSpec)
+    }
+
     /// Reclaim a connection's cache.
     ///
     /// Three refusals, and none of them is skippable — unlike deletion, where a user
@@ -345,7 +374,7 @@ public actor ConnectionManager {
     /// them underneath a live mount produces read errors rather than a clean re-fetch.
     @discardableResult
     public func clearCache(for connection: Connection) async throws -> Int64 {
-        guard active[connection.id] == nil else { throw CacheRefusal.stillMounted }
+        guard !isServing(fsSpec: connection.fsSpec) else { throw CacheRefusal.stillMounted }
 
         let root = try await rcloneCacheRoot()
         let usage = VFSCache.usage(cacheRoot: root, fsSpec: connection.fsSpec)
