@@ -299,28 +299,36 @@ Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), w
 the unit of work — but the backlog is recorded here too, so this file remains a
 complete account of the project without needing GitHub open.
 
-1. **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)). The one
-   that changes who can use grrclone: today a new user still needs `rclone config` in a
-   terminal before the app is any use to them, which is a hard stop for the audience it
-   is for. The form must be generated from the rc `config/providers` endpoint and never
-   hand-written per backend — the current build reports 1,147 options across all
-   providers, so a hand-maintained version is wrong the day rclone ships a new one.
-   OAuth should use rclone's own browser flow; `config/create` builds the remote.
+Issues are grouped into milestones. Release milestones are closed once the release
+ships, so they read as history; the two non-release milestones never close, because the
+things in them are not waiting on us.
 
-2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28)).
-   Blocked on notability alone — 75 stars, or 30 forks, or 30 watchers. The cask passes
-   `brew audit` otherwise; only that rule fails, which is circular for a project
-   Homebrew would help people find. The tap covers it meanwhile and the same cask goes
-   upstream unchanged when the bar is met.
+| Milestone | Holds | State |
+|---|---|---|
+| `v0.2.0` | Bandwidth limit, log viewer, opt-in update checks, crash-left-mountpoint fix | closed, shipped 2026-09-17 |
+| `v0.3.0` | Add-remote wizard, OAuth without a terminal, config encryption offer, soft-mount docs | closed, shipped 2026-09-17 |
+| `v0.4.0` | Remote lifecycle management | open |
+| `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
+| `Known limitations` | Documented, deliberately not fixed | never closes |
 
-3. **Document the soft-mount tradeoff**
-   ([#42](https://github.com/mlaify/grrclone/issues/42)). Say plainly that `soft` trades
-   a hang for an I/O error after roughly two minutes, and that `--vfs-cache-mode full`
-   absorbs most of it because writes land in the local cache first. Documentation only;
-   `soft` is settled and right.
+Remaining work:
 
-Known limitations with no fix available are filed so they can be pointed at rather than
-re-investigated each time someone notices them:
+1. **Delete a remote** ([#69](https://github.com/mlaify/grrclone/issues/69), `v0.4.0`).
+   The last obvious gap in the wizard's story: grrclone can add a remote but not remove
+   one. It has to unmount first, flush pending uploads, and leave every *other* remote
+   untouched — including its password. `config/delete` was tested directly and behaves:
+   the surviving remote's password revealed byte-identically, the file stayed encrypted,
+   and deleting against a locked config failed with the file unchanged by hash. The work
+   is the UI, the warning, and the tests that prove all of that stays true.
+
+2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
+   `Blocked on adoption`). Blocked on notability alone — 75 stars, or 30 forks, or 30
+   watchers. The cask passes `brew audit` otherwise; only that rule fails, which is
+   circular for a project Homebrew would help people find. The tap covers it meanwhile
+   and the same cask goes upstream unchanged when the bar is met.
+
+Known limitations with no fix available are filed under `Known limitations` so they can
+be pointed at rather than re-investigated each time someone notices them:
 
 - **Locks are local only** ([#41](https://github.com/mlaify/grrclone/issues/41)).
   `nolocks,locallocks` is what stops anything taking an `fcntl` lock hanging forever on
@@ -334,6 +342,10 @@ re-investigated each time someone notices them:
   FUSE flag that does not exist on `serve nfs`, and filters govern what rclone reads,
   not what the VFS writes back. The related `.DS_Store` problem **is** solved, in
   Settings.
+- **WebDAV/NetFS as an option** ([#27](https://github.com/mlaify/grrclone/issues/27)).
+  Built, measured, rejected — it bought nothing NFS does not already give
+  (`volumeIsEjectable=false` either way). Filed here rather than reopened when someone
+  next wonders whether it would help.
 
 ## Settled decisions
 
