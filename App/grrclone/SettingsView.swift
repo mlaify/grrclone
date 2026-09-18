@@ -53,8 +53,8 @@ struct SettingsView: View {
             } else {
                 Section {
                     Text(model.rows.isEmpty
-                         ? "No remotes found. Add one with `rclone config`."
-                         : "Choose a connection above to change how it is mounted.")
+                         ? "No remotes yet — add one above."
+                         : "Choose a connection to change how it is mounted.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -82,16 +82,8 @@ struct SettingsView: View {
             Section {
                 DSStoreToggle()
             } footer: {
-                Text("""
-                     Finder writes a hidden .DS_Store file into every folder it opens, \
-                     and on a remote those get uploaded. This stops it for all network \
-                     volumes, not only grrclone's, and takes effect once Finder \
-                     restarts.
-
-                     It does not stop the ._ files. Those carry attributes that NFS \
-                     cannot store, so macOS writes one beside almost every file, and \
-                     nothing on this side can prevent it.
-                     """)
+                Text("Keeps Finder's hidden .DS_Store files off your remotes. "
+                     + "Applies to all network volumes. The ._ files can't be stopped.")
                 .font(.caption).foregroundStyle(.secondary)
             }
             if model.configIsEncrypted {
@@ -107,8 +99,7 @@ struct SettingsView: View {
                         }
                     }
                 } footer: {
-                    Text("Your rclone configuration is encrypted. Forgetting the "
-                         + "password means grrclone asks for it the next time it starts.")
+                    Text("Forget it and grrclone will ask for it at the next start.")
                     .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -121,10 +112,8 @@ struct SettingsView: View {
             Section {
                 BandwidthLimitField(model: model)
             } footer: {
-                Text("Limits every transfer, since one rclone process serves all your "
-                     + "connections. Use rclone's syntax — 10M, 512k, or 1M:100k for "
-                     + "separate upload and download limits. Leave empty for no limit. "
-                     + "Takes effect immediately, including on transfers already running.")
+                Text("Applies to all connections, right away. Try 10M, 512k, or "
+                     + "1M:100k for separate up and down. Empty means no limit.")
                 .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -138,10 +127,7 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("Each connection is mounted in a folder of its own beneath this "
-                     + "path. Changing it does not move anything already mounted; "
-                     + "disconnect and reconnect for it to take effect. grrclone never "
-                     + "unmounts anything it did not create.")
+                Text("Each connection gets its own folder here. Reconnect to apply.")
                 .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -173,11 +159,8 @@ struct SettingsView: View {
             Text("Connects rclone remotes as Finder volumes. No kernel extension, no root.")
             Divider()
             Text("Privacy").font(.headline)
-            Text("""
-                 No telemetry, no analytics, no crash reporting, and no update check. \
-                 The only network connections made are to the storage providers you \
-                 configure. There are no accounts and no license keys.
-                 """)
+            Text("No telemetry, no analytics, no accounts, no licence keys. "
+                 + "grrclone only connects to the storage you set up.")
             .font(.callout)
             .foregroundStyle(.secondary)
             Spacer()
@@ -216,11 +199,9 @@ private struct ConnectionDetail: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("File locks are not shared between Macs")
                             .font(.caption.weight(.medium))
-                        Text("Two Macs can open the same file at once and each "
-                             + "believe it has an exclusive lock. Take care with "
-                             + "anything that relies on locking — password databases, "
-                             + "encrypted vaults, Office documents — and avoid having "
-                             + "the same one open in two places.")
+                        Text("Don't open the same password database, vault or "
+                             + "document on two Macs at once — neither will know "
+                             + "about the other.")
                         .font(.caption2).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -229,10 +210,7 @@ private struct ConnectionDetail: View {
                         .foregroundStyle(.orange)
                 }
             } footer: {
-                Text("A limitation of the protocol, not a setting. rclone's NFS "
-                     + "server runs no lock daemon, so grrclone satisfies locks "
-                     + "locally — without that, anything taking a lock would hang "
-                     + "forever instead.")
+                Text("A limit of the protocol, not a setting you can change.")
                 .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -241,10 +219,7 @@ private struct ConnectionDetail: View {
                 Toggle("Read only", isOn: $readOnly)
                 TextField("Cache size limit", text: $cacheSize)
             } footer: {
-                Text("""
-                     Files you write are cached on this Mac and uploaded in the \
-                     background, which is what Finder and apps like Office expect.
-                     """)
+                Text("Files you save are cached here and uploaded in the background.")
                 .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -465,14 +440,12 @@ private struct LogsTab: View {
             }
 
             if model.logLines.isEmpty {
-                Text("Nothing logged yet. At Notice the daemon is quiet unless "
-                     + "something goes wrong; raise the detail to see more.")
+                Text("Nothing yet — raise the detail to see more.")
                 .font(.caption).foregroundStyle(.secondary)
             }
 
-            Text("Passwords and credentials in URLs are removed before anything is "
-                 + "shown here, but read what you copy before attaching it to a bug "
-                 + "report. Debug is loud and is not a level to leave switched on.")
+            Text("Passwords are removed automatically. Debug is very noisy — "
+                 + "don't leave it on.")
             .font(.caption).foregroundStyle(.secondary)
         }
         .padding()
@@ -508,9 +481,8 @@ private struct UpdatesTab: View {
 
     private var installedByNote: String {
         guard isHomebrew else { return "" }
-        return "Homebrew manages this copy. Update it with `brew upgrade --cask "
-            + "grrclone`. grrclone will not replace its own bundle: two updaters "
-            + "fighting over one app is how you end up downgraded."
+        return "Homebrew manages this copy — update it with "
+            + "`brew upgrade --cask grrclone`."
     }
 
     private var howToInstallNote: String {
@@ -545,12 +517,8 @@ private struct UpdatesTab: View {
                 Toggle("Include pre-releases", isOn: $model.includePrereleases)
                     .disabled(!model.updateChecksEnabled)
             } footer: {
-                Text("""
-                     Off by default. When on, grrclone asks GitHub which releases \
-                     exist — the only connection it ever makes that is not to your own \
-                     storage. It sends nothing about you or your remotes, and never \
-                     downloads or installs anything on its own.
-                     """)
+                Text("Asks GitHub what versions exist. Sends nothing about you, "
+                     + "and never installs anything by itself.")
                 .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -639,10 +607,8 @@ private struct EncryptConfigOffer: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Your remote passwords are not encrypted")
                         .font(.caption.weight(.medium))
-                    Text("They are stored in your rclone configuration, obscured rather "
-                         + "than encrypted — anything that can read that file can "
-                         + "recover them. Encrypting the configuration fixes that, and "
-                         + "grrclone can remember the one password that opens it.")
+                    Text("Anything that can read your rclone config file can recover "
+                         + "them. Encrypting it fixes that.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -655,9 +621,8 @@ private struct EncryptConfigOffer: View {
                 SecureField("Confirm", text: $confirm)
                 Toggle("Remember it in my keychain", isOn: $remember)
 
-                Text("Every other tool using rclone on this Mac will need this password "
-                     + "too, through RCLONE_CONFIG_PASS or a prompt. Mounts stay up "
-                     + "while this happens.")
+                Text("Any other rclone tool on this Mac will need this password too. "
+                     + "Your mounts stay up.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
