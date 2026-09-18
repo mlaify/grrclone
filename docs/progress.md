@@ -375,25 +375,49 @@ things in them are not waiting on us.
 |---|---|---|
 | `v0.2.0` | Bandwidth limit, log viewer, opt-in update checks, crash-left-mountpoint fix | closed, shipped 2026-09-17 |
 | `v0.3.0` | Add-remote wizard, OAuth without a terminal, config encryption offer, soft-mount docs | closed, shipped 2026-09-17 |
-| `v0.4.0` | Remote lifecycle management | open |
+| `v0.4.0` | Audit fixes, delete a remote, the changelog | closed, shipped 2026-09-18 |
+| `v0.5.0` | Transfer visibility, remote editing, cache control | open |
 | `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
 | `Known limitations` | Documented, deliberately not fixed | never closes |
 
 Remaining work:
 
-1. **Delete a remote** ([#69](https://github.com/mlaify/grrclone/issues/69), `v0.4.0`).
-   The last obvious gap in the wizard's story: grrclone can add a remote but not remove
-   one. It has to unmount first, flush pending uploads, and leave every *other* remote
-   untouched — including its password. `config/delete` was tested directly and behaves:
-   the surviving remote's password revealed byte-identically, the file stayed encrypted,
-   and deleting against a locked config failed with the file unchanged by hash. The work
-   is the UI, the warning, and the tests that prove all of that stays true.
+1. **Transfer progress is fetched but never shown**
+   ([#81](https://github.com/mlaify/grrclone/issues/81), `v0.5.0`). `core/stats` and
+   `vfs/queue` are already implemented in the rc client and nothing consumes them, so
+   the app can say "3 uploads pending" but not what, how fast, or how long. It is the
+   most visible gap against Mountain Duck and ExpanDrive, and the client work is done.
 
-2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
+2. **A remote's subpath cannot be set in the UI**
+   ([#82](https://github.com/mlaify/grrclone/issues/82), `v0.5.0`). `Connection.path`
+   exists and `fsSpec` composes it correctly; no view exposes it, so every connection
+   mounts the whole remote.
+
+3. **An existing remote cannot be edited**
+   ([#83](https://github.com/mlaify/grrclone/issues/83), `v0.5.0`). A rotated S3 key
+   currently means delete and re-create. `config/update` is already in the client; the
+   work is a form pre-filled from `config/dump`, which returns obscured secrets and
+   must not display or re-obscure them wrongly.
+
+4. **No way to see or reclaim the VFS cache**
+   ([#84](https://github.com/mlaify/grrclone/issues/84), `v0.5.0`). Three remotes can
+   quietly hold 60 GB with nothing reporting it. The substance is the safety
+   interlock — a purge must refuse while anything is dirty — not the display.
+
+5. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
    `Blocked on adoption`). Blocked on notability alone — 75 stars, or 30 forks, or 30
    watchers. The cask passes `brew audit` otherwise; only that rule fails, which is
    circular for a project Homebrew would help people find. The tap covers it meanwhile
    and the same cask goes upstream unchanged when the bar is met.
+
+6. **Mounts cannot land in `/Volumes`**
+   ([#85](https://github.com/mlaify/grrclone/issues/85), `Blocked on adoption`). The
+   most visible remaining difference in how the product *feels* against the paid
+   alternatives. Deferred on cost rather than difficulty: `/Volumes` is `root:wheel`
+   755, so creating the directory needs a privileged helper — a second signed
+   executable, an authorisation prompt that cuts against "asks for nothing", and
+   `diskarbitrationd` pruning the directory on every boot. Worth doing only if people
+   actually ask.
 
 Known limitations with no fix available are filed under `Known limitations` so they can
 be pointed at rather than re-investigated each time someone notices them:
