@@ -54,23 +54,27 @@ public struct Connection: Codable, Sendable, Identifiable, Equatable {
     ///
     /// rclone takes everything after the colon literally:
     ///
-    /// - A **colon** is removed. `remote:a:b` parses as a *different remote*, so this
-    ///   is the one case here that changes what gets mounted rather than merely
-    ///   looking untidy.
     /// - A **leading slash** is removed. `remote:/folder` is an absolute path, which
     ///   some backends accept and others reject outright.
     /// - A **trailing slash** is removed, so the preview does not read `remote:x/`,
     ///   which looks like a mistake.
-    /// - `..` components are dropped. They mean nothing to rclone, which does not
-    ///   resolve them, so a path containing one silently points at a directory that
-    ///   does not exist.
+    /// - `..` and `.` components are dropped. rclone does not resolve them, so a path
+    ///   containing one silently points at a directory that does not exist rather
+    ///   than at the parent.
     ///
-    /// Trimmed rather than refused: none of these are worth rejecting the input over,
+    /// **Colons are kept.** An earlier version stripped them, on the reasoning that
+    /// `remote:a:b` would parse as a different remote. That reasoning is wrong:
+    /// rclone splits on the *first* colon only, so `dav1:reports:2026` is the
+    /// `reports:2026` directory of `dav1`. Verified directly —
+    /// `rclone lsf "loc:/tmp/x/reports:2026"` lists that directory's contents. A
+    /// backend that allows a colon in a directory name is entitled to have one, and
+    /// silently stripping it mounted somewhere else.
+    ///
+    /// Trimmed rather than refused: none of these is worth rejecting the input over,
     /// and the caller shows what was actually saved.
     public static func sanitisedPath(_ raw: String) -> String {
         let components = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: ":", with: "")
             .split(separator: "/")
             .filter { $0 != "." && $0 != ".." }
         return components.joined(separator: "/")

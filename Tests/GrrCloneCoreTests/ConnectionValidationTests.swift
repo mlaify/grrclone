@@ -41,15 +41,17 @@ final class ConnectionValidationTests: XCTestCase {
         XCTAssertEqual(Connection.sanitisedPath(""), "")
     }
 
-    /// The one that changes what gets mounted rather than merely looking untidy:
-    /// `remote:a:b` parses as a different remote entirely.
-    func testColonIsRemovedFromPath() {
-        XCTAssertEqual(Connection.sanitisedPath("other:secret"), "othersecret")
+    /// Colons are kept, because rclone splits on the *first* one only.
+    ///
+    /// An earlier version stripped them to stop `remote:a:b` naming a second remote.
+    /// It cannot: `dav1:reports:2026` is the `reports:2026` directory of `dav1`,
+    /// verified with `rclone lsf` against a real directory containing a colon. The
+    /// stripping silently mounted somewhere else.
+    func testColonsInAPathAreKept() {
+        XCTAssertEqual(Connection.sanitisedPath("reports:2026"), "reports:2026")
 
-        var connection = Connection(remote: "dav1")
-        connection.path = Connection.sanitisedPath("other:secret")
-        XCTAssertEqual(connection.fsSpec, "dav1:othersecret",
-                       "a colon in the subpath must not be able to name another remote")
+        let connection = Connection(remote: "dav1", path: Connection.sanitisedPath("reports:2026"))
+        XCTAssertEqual(connection.fsSpec, "dav1:reports:2026")
     }
 
     /// `remote:/folder` is an absolute path — accepted by some backends, rejected by
