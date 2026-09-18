@@ -29,6 +29,56 @@ public struct Connection: Codable, Sendable, Identifiable, Equatable {
     public var fsSpec: String {
         path.isEmpty ? "\(remote):" : "\(remote):\(path)"
     }
+
+    // MARK: - Validation
+
+    /// Keep a connection name usable as a single folder name.
+    ///
+    /// The name *is* the folder the remote is mounted in, so a separator in it creates
+    /// nested directories — and then the mount point no longer has the shape the rest
+    /// of the code assumes, which is how a repair could put a volume back one level
+    /// deeper than it found it. Neither `.` nor `..` is a usable folder either.
+    ///
+    /// Replaced rather than rejected, and the caller shows the result, so the user
+    /// sees what was saved instead of being told off.
+    public static func sanitisedName(_ raw: String, fallback: String) -> String {
+        let cleaned = raw
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty || cleaned == "." || cleaned == ".." { return fallback }
+        return cleaned
+    }
+
+    /// Keep a subpath usable as the right-hand side of `remote:path`.
+    ///
+    /// rclone takes everything after the colon literally:
+    ///
+    /// - A **leading slash** is removed. `remote:/folder` is an absolute path, which
+    ///   some backends accept and others reject outright.
+    /// - A **trailing slash** is removed, so the preview does not read `remote:x/`,
+    ///   which looks like a mistake.
+    /// - `..` and `.` components are dropped. rclone does not resolve them, so a path
+    ///   containing one silently points at a directory that does not exist rather
+    ///   than at the parent.
+    ///
+    /// **Colons are kept.** An earlier version stripped them, on the reasoning that
+    /// `remote:a:b` would parse as a different remote. That reasoning is wrong:
+    /// rclone splits on the *first* colon only, so `dav1:reports:2026` is the
+    /// `reports:2026` directory of `dav1`. Verified directly —
+    /// `rclone lsf "loc:/tmp/x/reports:2026"` lists that directory's contents. A
+    /// backend that allows a colon in a directory name is entitled to have one, and
+    /// silently stripping it mounted somewhere else.
+    ///
+    /// Trimmed rather than refused: none of these is worth rejecting the input over,
+    /// and the caller shows what was actually saved.
+    public static func sanitisedPath(_ raw: String) -> String {
+        let components = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "/")
+            .filter { $0 != "." && $0 != ".." }
+        return components.joined(separator: "/")
+    }
 }
 
 public enum TransportKind: String, Codable, Sendable, CaseIterable {

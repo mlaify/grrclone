@@ -796,6 +796,40 @@ final class AppModel: ObservableObject {
         setState(.connecting, for: connection.id)
         Task.detached { [manager] in
             guard let manager else { return }
+
+            // Refuse if the live mount still owes the provider writes *and* the
+            // remount would point somewhere else.
+            //
+            // Changing the subpath changes `fsSpec`, and `fsSpec` is what names the
+            // VFS cache directory. Remounting therefore abandons the old cache: no
+            // server serves that filesystem any more, so rclone never resumes those
+            // uploads, and they sit on disk indefinitely while Finder reported the
+            // files as saved. Nothing else in the app would ever mention it.
+            let mounted = await manager.activeConnection(id: connection.id)
+            if let mounted, mounted.fsSpec != connection.fsSpec,
+               let pending = await manager.pendingUploadsForActiveMount(id: connection.id),
+               !pending.isSafeToDiscard {
+                let detail = pending.inspectionFailed
+                    ? "grrclone could not check whether anything is still uploading from "
+                      + "\(mounted.fsSpec)."
+                    : "\(pending.count) file(s) saved to \(mounted.fsSpec) have not "
+                      + "finished uploading."
+                // Put the row back exactly where it was. It is still mounted, at the
+                // path it was already at; inventing one here would show the user a
+                // location that does not exist.
+                let where_ = await manager.activeMountPoint(id: connection.id)
+                await MainActor.run {
+                    if let where_ {
+                        self.setState(.mounted(at: where_), for: connection.id)
+                    }
+                    self.lastError = detail
+                        + " Changing the folder would leave them in a cache nothing "
+                        + "uploads from. Wait for them to finish, then remount."
+                }
+                await self.refresh()
+                return
+            }
+
             do {
                 try await manager.disconnect(connection.id)
                 let root = await MainActor.run { self.mountRoot }

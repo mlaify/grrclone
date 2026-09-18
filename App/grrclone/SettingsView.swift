@@ -196,6 +196,7 @@ private struct ConnectionDetail: View {
     @ObservedObject var model: AppModel
 
     @State private var displayName: String = ""
+    @State private var subpath: String = ""
     @State private var readOnly = false
     @State private var cacheSize = ""
     @State private var connectAtLogin = false
@@ -203,11 +204,19 @@ private struct ConnectionDetail: View {
     var body: some View {
         Group {
             Section {
-                LabeledContent("Remote", value: connection.fsSpec)
+                LabeledContent("Remote", value: previewFsSpec)
                 TextField("Name", text: $displayName)
             } footer: {
                 Text("Also the folder name this remote is mounted in.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                TextField("Folder", text: $subpath, prompt: Text("the whole remote"))
+            } footer: {
+                Text("Mount one folder instead of everything. Leave empty for the "
+                     + "whole remote.")
+                .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {
@@ -294,26 +303,17 @@ private struct ConnectionDetail: View {
         .onChange(of: connection.id) { _, _ in load() }
     }
 
-    /// Keeps a connection name usable as a single folder name.
-    ///
-    /// The name *is* the folder the remote is mounted in, so a separator in it creates
-    /// nested directories — and then the mount point no longer has the shape the rest
-    /// of the code assumes, which is how a repair could put a volume back one level
-    /// deeper than it found it. Neither `.` nor `..` is a usable folder either.
-    ///
-    /// Replaced rather than rejected, and the field is updated to show the result, so
-    /// the user sees what was saved instead of being told off.
-    static func sanitiseName(_ raw: String, fallback: String) -> String {
-        let cleaned = raw
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty || cleaned == "." || cleaned == ".." { return fallback }
-        return cleaned
+    /// What the remote will resolve to once saved, so the Remote row is not stale
+    /// while the folder field is being typed into.
+    private var previewFsSpec: String {
+        var draft = connection
+        draft.path = Connection.sanitisedPath(subpath)
+        return draft.fsSpec
     }
 
     private var hasChanges: Bool {
         displayName != connection.displayName
+            || Connection.sanitisedPath(subpath) != connection.path
             || readOnly != connection.options.readOnly
             || cacheSize != connection.options.vfsCacheMaxSize
             || connectAtLogin != connection.connectAtLogin
@@ -321,6 +321,7 @@ private struct ConnectionDetail: View {
 
     private func load() {
         displayName = connection.displayName
+        subpath = connection.path
         readOnly = connection.options.readOnly
         cacheSize = connection.options.vfsCacheMaxSize
         connectAtLogin = connection.connectAtLogin
@@ -336,13 +337,15 @@ private struct ConnectionDetail: View {
     /// the id has not changed.
     private func save() {
         var updated = connection
-        updated.displayName = Self.sanitiseName(displayName, fallback: connection.remote)
+        updated.displayName = Connection.sanitisedName(displayName, fallback: connection.remote)
+        updated.path = Connection.sanitisedPath(subpath)
         updated.options.readOnly = readOnly
         updated.options.vfsCacheMaxSize = cacheSize.isEmpty ? "20G" : cacheSize
         updated.connectAtLogin = connectAtLogin
         model.update(updated)
 
         displayName = updated.displayName
+        subpath = updated.path
         cacheSize = updated.options.vfsCacheMaxSize
         readOnly = updated.options.readOnly
         connectAtLogin = updated.connectAtLogin

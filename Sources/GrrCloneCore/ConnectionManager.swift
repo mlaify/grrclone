@@ -78,6 +78,28 @@ public actor ConnectionManager {
 
     public var activeMounts: [ActiveMount] { Array(active.values) }
 
+    /// The connection as it was when mounted, which is not necessarily the one saved
+    /// in the store. Needed to reason about the cache the *live* mount is using.
+    public func activeConnection(id: UUID) -> Connection? { active[id]?.connection }
+
+    /// Where a live mount actually is, so a caller restoring UI state after a refused
+    /// operation can name the real path instead of inventing one.
+    public func activeMountPoint(id: UUID) -> URL? { active[id]?.mountPoint }
+
+    /// Unsent writes in the cache belonging to a mount as it is currently serving.
+    ///
+    /// Distinct from `pendingUploads(for:)`, which asks about a connection's *saved*
+    /// `fsSpec`. When the two differ — the subpath was edited but not yet remounted —
+    /// they name different cache directories, and it is the live one that holds work
+    /// nothing else will finish.
+    public func pendingUploadsForActiveMount(id: UUID) async -> PendingUploads? {
+        guard let mounted = active[id]?.connection else { return nil }
+        guard let root = try? await rcloneCacheRoot() else {
+            return PendingUploads(inspectionFailed: true)
+        }
+        return VFSCache.pendingUploads(cacheRoot: root, fsSpec: mounted.fsSpec)
+    }
+
     // MARK: - Connect
 
     public func connect(_ connection: Connection,
