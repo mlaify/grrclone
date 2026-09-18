@@ -103,10 +103,23 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if !model.configIsEncryptedOnDisk {
+            // `false` offers encryption. `nil` means we could not read the file, so
+            // say that rather than implying the configuration is in the clear.
+            switch model.configIsEncryptedOnDisk {
+            case .some(false):
                 Section {
                     EncryptConfigOffer(model: model)
                 }
+            case .none:
+                Section {
+                    Label("grrclone could not read your rclone configuration, so it "
+                          + "cannot tell whether it is encrypted.",
+                          systemImage: "questionmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            case .some(true):
+                EmptyView()
             }
 
             Section {
@@ -221,6 +234,27 @@ private struct ConnectionDetail: View {
             } footer: {
                 Text("Files you save are cached here and uploaded in the background.")
                 .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // Settings that only take effect at mount time were previously applied
+            // silently: the form looked saved while the live volume kept the old name
+            // and the old read-only state. Say so, and offer the one action that makes
+            // it true.
+            if model.needsRemount.contains(connection.id) {
+                Section {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Saved, but not yet in force")
+                                .font(.caption.weight(.medium))
+                            Text("These take effect when the remote is mounted.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Remount") { model.remount(connection) }
+                    }
+                }
             }
 
             Section {

@@ -55,7 +55,9 @@ final class AppModel: ObservableObject {
 
     /// Whether `rclone.conf` on disk is encrypted. Drives the offer to encrypt it,
     /// and the honesty of what the wizard says about where passwords go.
-    @Published private(set) var configIsEncryptedOnDisk = false
+    /// Nil when it could not be determined. The UI must say "unknown" rather than
+    /// asserting a security state it does not know — see ConfigEncryption.
+    @Published private(set) var configIsEncryptedOnDisk: Bool?
     @Published private(set) var configPath: String = ""
 
     /// How this copy was installed, which decides who may update it.
@@ -442,7 +444,7 @@ final class AppModel: ObservableObject {
         guard let supervisor, let client = try? await supervisor.requireClient() else { return }
         guard let path = try? await client.configPaths().config, !path.isEmpty else { return }
         configPath = path
-        configIsEncryptedOnDisk = ConfigEncryption.isEncrypted(configPath: path)
+        configIsEncryptedOnDisk = ConfigEncryption.encryptionState(configPath: path)
     }
 
     /// Encrypt the configuration, then hand the password to the running daemon.
@@ -455,6 +457,17 @@ final class AppModel: ObservableObject {
         guard let supervisor, let client = try? await supervisor.requireClient() else { return }
         guard let binary = DaemonSupervisor.locateBinary(bundled: Self.bundledRcloneURL()) else {
             lastError = "No rclone binary was found."
+            return
+        }
+
+        // Ask again rather than trusting whatever the last refresh left behind.
+        // `configPath` starts empty and `refreshConfigEncryptionState()` returns early
+        // on several paths, so it can still be "" here — which became
+        // `rclone --config ""`, aiming a real password at an unintended target and
+        // then reporting that encryption silently failed.
+        await refreshConfigEncryptionState()
+        guard !configPath.isEmpty else {
+            lastError = ConfigEncryption.Failure.unknownConfigPath.localizedDescription
             return
         }
 
@@ -648,10 +661,48 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Connections whose saved settings are not the ones currently in force, because
+    /// they were edited while mounted.
+    ///
+    /// `displayName`, `readOnly` and the cache size are all consumed at `connect()`
+    /// time, so editing a live connection changed nothing and said nothing. The
+    /// read-only case is the one that matters: the user believes a safety setting is
+    /// active on a volume that is still accepting writes.
+    @Published private(set) var needsRemount: Set<UUID> = []
+
     func update(_ connection: Connection) {
+        let wasMounted = rows.first { $0.id == connection.id }?.state.isMounted ?? false
         Task {
             try? await store.upsert(connection)
+            if wasMounted { needsRemount.insert(connection.id) }
             await refresh()
+        }
+    }
+
+    /// Apply pending edits by taking the connection down and bringing it back up.
+    ///
+    /// Explicit rather than automatic: a remount interrupts whatever is reading the
+    /// volume, and doing that without being asked is its own surprise.
+    func remount(_ connection: Connection) {
+        setState(.connecting, for: connection.id)
+        Task.detached { [manager] in
+            guard let manager else { return }
+            do {
+                try await manager.disconnect(connection.id)
+                let root = await MainActor.run { self.mountRoot }
+                let mount = try await manager.connect(connection, mountRoot: root)
+                await MainActor.run {
+                    self.needsRemount.remove(connection.id)
+                    self.setState(.mounted(at: mount.mountPoint), for: connection.id)
+                    self.status = "Remounted \(connection.displayName)"
+                }
+            } catch {
+                await MainActor.run {
+                    self.setState(.failed(error.localizedDescription), for: connection.id)
+                    self.lastError = error.localizedDescription
+                }
+            }
+            await self.refresh()
         }
     }
 

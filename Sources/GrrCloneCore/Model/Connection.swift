@@ -32,11 +32,25 @@ public struct Connection: Codable, Sendable, Identifiable, Equatable {
 }
 
 public enum TransportKind: String, Codable, Sendable, CaseIterable {
-    /// `rclone serve nfs` on loopback, mounted by us with hardened options. The default.
+    /// `rclone serve nfs` on loopback, mounted by us with hardened options. The only
+    /// transport that ships.
     case nfs
-    /// `rclone serve webdav` on loopback, mounted via NetFS. Lands in /Volumes with an
-    /// eject button and no root, at the cost of macOS webdavfs's limitations.
-    case webdavNetFS = "webdav-netfs"
+
+    /// Anything we no longer implement decodes as `nfs` rather than failing.
+    ///
+    /// `webdav-netfs` was built, measured against NFS and dropped (#27), but stored
+    /// connections and hand-edited files still carry the string. Decoding it to a case
+    /// with no transport behind it produced a connection that threw "No transport
+    /// available" forever, with no UI to change it back — while `reconcileOrphans()`
+    /// coerced the same value to `.nfs`, so the two paths disagreed about what the
+    /// stored value meant.
+    ///
+    /// Coercing here settles it in one place, and the next save rewrites the file with
+    /// the current value.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TransportKind(rawValue: raw) ?? .nfs
+    }
 }
 
 /// Per-connection tunables. These map onto rclone's `vfs` and `nfs` option blocks, the

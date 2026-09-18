@@ -205,7 +205,10 @@ struct AddRemoteWizard: View {
                     // Said where the password is typed, not buried in Settings. A
                     // SecureField implies protection it does not provide: rclone
                     // obscures this value, and `rclone reveal` undoes that in one step.
-                    if !model.configIsEncryptedOnDisk {
+                    // Warn unless we know it is encrypted. An unknown state gets the
+                    // warning too: better to over-warn about credential storage than
+                    // to stay quiet because we could not check.
+                    if model.configIsEncryptedOnDisk != true {
                         Label("Stored in your rclone configuration, obscured rather than "
                               + "encrypted. Encrypt the configuration in Settings to "
                               + "protect it properly.",

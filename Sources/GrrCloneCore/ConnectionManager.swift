@@ -117,16 +117,29 @@ public actor ConnectionManager {
         guard let mount = active[connectionID] else { return }
         guard let transport = transports[mount.connection.transport] else { return }
 
+        // The unmount is the step that can fail meaningfully. If it throws we keep the
+        // connection active and the registry entry intact, because the mount is still
+        // up and we still own it.
         try await transport.unmount(at: mount.mountPoint)
 
         if let client = try? await supervisor.requireClient() {
             try? await client.stopServer(id: mount.serverID)
         }
-        try await registry.forget(mountPoint: mount.mountPoint.path)
+
+        // Past here the mount is down, so in-memory state must follow regardless of
+        // whether the registry write succeeds. Letting a failed `forget()` throw
+        // before this line left the connection marked active with nothing mounted:
+        // the UI kept showing it connected, and at quit `shutdown()` tried to unmount
+        // it again, failed, and left the daemon running for a mount that no longer
+        // existed.
         active[connectionID] = nil
         await recordLiveMounts()
-
         Self.removeIfEmpty(mount.mountPoint.path)
+
+        // Reported, not swallowed: a stale entry means the next launch will try to
+        // unmount a path that is already gone. Harmless, but the user should not have
+        // to infer it.
+        try await registry.forget(mountPoint: mount.mountPoint.path)
     }
 
     /// Remove a mount point directory we created, but only when it is empty. If an
@@ -138,7 +151,7 @@ public actor ConnectionManager {
     /// for is the one where shutdown never runs.
     private func recordLiveMounts() async {
         let paths = active.values.map(\.mountPoint.path).sorted()
-        await supervisor.session.update(mountPoints: paths)
+        supervisor.session.update(mountPoints: paths)
     }
 
     /// Remove an empty mountpoint, or protect it if it has to stay.

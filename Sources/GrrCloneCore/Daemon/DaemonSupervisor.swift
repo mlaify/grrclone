@@ -134,8 +134,8 @@ public actor DaemonSupervisor {
         let socket = runtimeDirectory.appendingPathComponent("rc.sock").path
         try? fm.removeItem(atPath: socket)
 
-        let user = Self.randomToken()
-        let password = Self.randomToken()
+        let user = try Self.randomToken()
+        let password = try Self.randomToken()
 
         let process = Process()
         process.executableURL = binary
@@ -305,9 +305,16 @@ public actor DaemonSupervisor {
         for pipe in pipes { pipe.fileHandleForReading.readabilityHandler = nil }
     }
 
-    private static func randomToken() -> String {
+    /// Throws rather than degrading. A discarded status here leaves the buffer as the
+    /// zeros it was initialised with, so both the rc user and password become the same
+    /// fixed string on every launch — silently, with nothing to notice. The 0600 socket
+    /// still carries the real access control, but a defence-in-depth layer that fails
+    /// open without saying so is worse than not having it.
+    private static func randomToken() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 24)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw Failure.didNotStart("could not generate control-socket credentials")
+        }
         return Data(bytes).base64EncodedString()
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "+", with: "-")
