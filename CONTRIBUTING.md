@@ -112,6 +112,13 @@ subtle bug, say what the wrong behaviour was and how it presented.
 
 Keep pull requests focused. One concern per PR.
 
+**Update `CHANGELOG.md` in the same commit.** Anything a user would notice gets a line
+under `## [Unreleased]`, written for someone deciding whether to upgrade — what changed
+for them, not which internal function moved. Reconstructing a changelog at release time
+loses the reasoning while it is still fresh, and the auto-generated GitHub release notes
+are a list of PR titles, which is not the same thing. Purely internal changes — a
+refactor, a test, a CI tweak — do not need an entry.
+
 ## Reporting bugs
 
 Include your macOS version, `rclone version`, which remote backend you are using, and

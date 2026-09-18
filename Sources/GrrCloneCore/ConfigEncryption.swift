@@ -22,9 +22,17 @@ public enum ConfigEncryption {
         case alreadyEncrypted
         case commandFailed(String)
         case didNotTake
+        case unknownConfigPath
+        case cannotReadConfig(String)
 
         public var errorDescription: String? {
             switch self {
+            case .unknownConfigPath:
+                return "grrclone could not determine where your rclone configuration "
+                     + "lives, so it will not try to encrypt it."
+            case .cannotReadConfig(let path):
+                return "Could not read \(path), so grrclone cannot tell whether it is "
+                     + "already encrypted."
             case .alreadyEncrypted:
                 return "That configuration is already encrypted."
             case .commandFailed(let detail):
@@ -40,12 +48,27 @@ public enum ConfigEncryption {
     /// Read from the file rather than asked of the daemon: a running daemon that has
     /// already been given the password answers questions about the config perfectly
     /// well, so its behaviour says nothing about what is on disk.
-    public static func isEncrypted(configPath: String) -> Bool {
-        guard let handle = FileHandle(forReadingAtPath: configPath) else { return false }
+    /// Nil when the file cannot be read at all.
+    ///
+    /// "Unreadable" is not "plaintext". Answering a question the UI presents as a
+    /// security state with a confident `false` means offering to encrypt a
+    /// configuration that may already be encrypted, on no evidence. Compare
+    /// `ConnectionManager.Activity.unreachable`, which exists so "we could not ask"
+    /// is never reported as "nothing pending".
+    public static func encryptionState(configPath: String) -> Bool? {
+        guard !configPath.isEmpty,
+              let handle = FileHandle(forReadingAtPath: configPath) else { return nil }
         defer { try? handle.close() }
-        let head = (try? handle.read(upToCount: 256)) ?? Data()
-        guard let text = String(data: head, encoding: .utf8) else { return false }
+        guard let head = try? handle.read(upToCount: 256),
+              let text = String(data: head ?? Data(), encoding: .utf8) else { return nil }
         return text.contains("RCLONE_ENCRYPT_V0") || text.contains("Encrypted rclone configuration")
+    }
+
+    /// Convenience for the paths that genuinely only care whether it is *known* to be
+    /// encrypted. An unknown answer is false here, so never use this to decide that
+    /// encrypting is safe — use `encryptionState` and handle nil.
+    public static func isEncrypted(configPath: String) -> Bool {
+        encryptionState(configPath: configPath) == true
     }
 
     /// Encrypt the configuration with a new password.
@@ -58,7 +81,14 @@ public enum ConfigEncryption {
     /// from its in-memory copy and did not drop anything. The caller should still hand
     /// the password to the running daemon afterwards, so a later re-read does not fail.
     public static func encrypt(rclone: URL, configPath: String, password: String) throws {
-        guard !isEncrypted(configPath: configPath) else { throw Failure.alreadyEncrypted }
+        // Refuse rather than guess. An empty path would become `rclone --config ""`,
+        // which aims a real password at an unintended target; an unreadable one means
+        // we cannot know whether we are about to double-encrypt. See #79, #80.
+        guard !configPath.isEmpty else { throw Failure.unknownConfigPath }
+        guard let encrypted = encryptionState(configPath: configPath) else {
+            throw Failure.cannotReadConfig(configPath)
+        }
+        guard !encrypted else { throw Failure.alreadyEncrypted }
 
         let process = Process()
         process.executableURL = rclone

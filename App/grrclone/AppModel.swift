@@ -55,7 +55,9 @@ final class AppModel: ObservableObject {
 
     /// Whether `rclone.conf` on disk is encrypted. Drives the offer to encrypt it,
     /// and the honesty of what the wizard says about where passwords go.
-    @Published private(set) var configIsEncryptedOnDisk = false
+    /// Nil when it could not be determined. The UI must say "unknown" rather than
+    /// asserting a security state it does not know — see ConfigEncryption.
+    @Published private(set) var configIsEncryptedOnDisk: Bool?
     @Published private(set) var configPath: String = ""
 
     /// How this copy was installed, which decides who may update it.
@@ -125,6 +127,11 @@ final class AppModel: ObservableObject {
         let manager = ConnectionManager(supervisor: supervisor, registry: registry)
         self.supervisor = supervisor
         self.manager = manager
+
+        // Before anything starts: teach the supervisor to bring our mounts down before
+        // it kills a daemon left over from an unclean shutdown. Killing it first leaves
+        // the kernel talking to a dead NFS server.
+        await manager.installOrphanCleanup()
 
         do {
             let client = try await supervisor.start()
@@ -437,7 +444,7 @@ final class AppModel: ObservableObject {
         guard let supervisor, let client = try? await supervisor.requireClient() else { return }
         guard let path = try? await client.configPaths().config, !path.isEmpty else { return }
         configPath = path
-        configIsEncryptedOnDisk = ConfigEncryption.isEncrypted(configPath: path)
+        configIsEncryptedOnDisk = ConfigEncryption.encryptionState(configPath: path)
     }
 
     /// Encrypt the configuration, then hand the password to the running daemon.
@@ -450,6 +457,17 @@ final class AppModel: ObservableObject {
         guard let supervisor, let client = try? await supervisor.requireClient() else { return }
         guard let binary = DaemonSupervisor.locateBinary(bundled: Self.bundledRcloneURL()) else {
             lastError = "No rclone binary was found."
+            return
+        }
+
+        // Ask again rather than trusting whatever the last refresh left behind.
+        // `configPath` starts empty and `refreshConfigEncryptionState()` returns early
+        // on several paths, so it can still be "" here — which became
+        // `rclone --config ""`, aiming a real password at an unintended target and
+        // then reporting that encryption silently failed.
+        await refreshConfigEncryptionState()
+        guard !configPath.isEmpty else {
+            lastError = ConfigEncryption.Failure.unknownConfigPath.localizedDescription
             return
         }
 
@@ -604,6 +622,11 @@ final class AppModel: ObservableObject {
                 let root = await MainActor.run { self.mountRoot }
                 let mount = try await manager.connect(connection, mountRoot: root)
                 await MainActor.run {
+                    // A fresh mount is built from the saved connection, so whatever was
+                    // pending is now in force. Clearing this only in `remount()` left
+                    // Settings insisting the changes had not taken after an ordinary
+                    // disconnect-and-reconnect from the menu.
+                    self.needsRemount.remove(connection.id)
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Connected \(connection.displayName)"
                 }
@@ -643,10 +666,70 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Connections whose saved settings are not the ones currently in force, because
+    /// they were edited while mounted.
+    ///
+    /// `displayName`, `readOnly` and the cache size are all consumed at `connect()`
+    /// time, so editing a live connection changed nothing and said nothing. The
+    /// read-only case is the one that matters: the user believes a safety setting is
+    /// active on a volume that is still accepting writes.
+    @Published private(set) var needsRemount: Set<UUID> = []
+
+    /// Whether two versions of a connection differ in anything consumed at mount time.
+    ///
+    /// `connectAtLogin` is deliberately excluded: it is honoured at the *next* launch
+    /// and takes effect the moment it is saved, so flagging it would offer a
+    /// disruptive remount for a preference that is already in force.
+    static func needsRemountBetween(_ old: Connection, _ new: Connection) -> Bool {
+        old.displayName != new.displayName
+            || old.remote != new.remote
+            || old.path != new.path
+            || old.transport != new.transport
+            || old.options != new.options
+    }
+
     func update(_ connection: Connection) {
+        let previous = rows.first { $0.id == connection.id }
+        let wasMounted = previous?.state.isMounted ?? false
+        let mountAffecting = previous.map {
+            Self.needsRemountBetween($0.connection, connection)
+        } ?? false
+
         Task {
             try? await store.upsert(connection)
+            if wasMounted && mountAffecting { needsRemount.insert(connection.id) }
             await refresh()
+        }
+    }
+
+    /// Apply pending edits by taking the connection down and bringing it back up.
+    ///
+    /// Explicit rather than automatic: a remount interrupts whatever is reading the
+    /// volume, and doing that without being asked is its own surprise.
+    func remount(_ connection: Connection) {
+        setState(.connecting, for: connection.id)
+        Task.detached { [manager] in
+            guard let manager else { return }
+            do {
+                try await manager.disconnect(connection.id)
+                let root = await MainActor.run { self.mountRoot }
+                let mount = try await manager.connect(connection, mountRoot: root)
+                await MainActor.run {
+                    // This path calls the manager directly rather than going through
+                    // `connect(_:)`, so it clears the flag itself. Both places set it
+                    // on the same condition: a mount was just built from the saved
+                    // connection, so the saved connection is now what is in force.
+                    self.needsRemount.remove(connection.id)
+                    self.setState(.mounted(at: mount.mountPoint), for: connection.id)
+                    self.status = "Remounted \(connection.displayName)"
+                }
+            } catch {
+                await MainActor.run {
+                    self.setState(.failed(error.localizedDescription), for: connection.id)
+                    self.lastError = error.localizedDescription
+                }
+            }
+            await self.refresh()
         }
     }
 

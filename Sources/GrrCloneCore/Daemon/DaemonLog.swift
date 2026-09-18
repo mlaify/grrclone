@@ -104,6 +104,37 @@ public actor DaemonLog {
             with: "$1***",
             options: .regularExpression)
 
+        // Whole-value headers.
+        //
+        // The patterns above key on a credential *word*, which is why they caught
+        // `X-Auth-Token:` and missed the two that matter most: `Authorization: Bearer
+        // <oauth token>` and `Authorization: Basic <base64 user:password>`. Neither
+        // contains "token", "password" or "secret" anywhere, so both passed through
+        // untouched — verified by running these expressions against captured header
+        // lines rather than invented ones.
+        //
+        // The scheme is kept and everything after it replaced: knowing a request used
+        // Bearer is useful when diagnosing an auth failure, and the credential never
+        // is. `Proxy-Authorization` is covered by the same pattern.
+        result = result.replacingOccurrences(
+            of: "(?i)((?:proxy-)?authorization\\s*:\\s*)(\\S+)(\\s+\\S+)?",
+            with: "$1$2 ***",
+            options: .regularExpression)
+
+        // Cookies carry session material and no useful diagnostic detail.
+        result = result.replacingOccurrences(
+            of: "(?i)((?:set-)?cookie\\s*:\\s*).+",
+            with: "$1***",
+            options: .regularExpression)
+
+        // AWS SigV4, which names neither a token nor a password. The access key id in
+        // `Credential=` identifies the account and the signature authenticates the
+        // request; neither belongs in a log a user is invited to copy.
+        result = result.replacingOccurrences(
+            of: "(?i)\\b(Signature|Credential|X-Amz-Signature|X-Amz-Credential)(=)[^\\s,&]+",
+            with: "$1$2***",
+            options: .regularExpression)
+
         return result
     }
 }

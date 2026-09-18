@@ -46,16 +46,44 @@ public struct DaemonPidFile: Sendable {
         return try? decoder.decode(Record.self, from: data)
     }
 
-    /// Terminate a previously recorded daemon if, and only if, it is provably still ours.
-    /// Returns the PID reaped, or nil if there was nothing to reap.
-    @discardableResult
-    public func reapOrphan() async -> Int32? {
+    /// The recorded daemon, if it is provably still ours and therefore safe to kill.
+    ///
+    /// Split from the kill itself so a caller can act in between. That gap is not a
+    /// convenience: an orphaned daemon is still serving live NFS mounts, and killing
+    /// it before those come down leaves the kernel talking to a dead server. See
+    /// `DaemonSupervisor.orphanCleanup`.
+    ///
+    /// A record that does not identify a live daemon of ours is cleared as stale and
+    /// nil returned, so callers cannot act on it.
+    public func reapableOrphan() async -> Record? {
         guard let record = read() else { return nil }
 
         guard await Self.isOurDaemon(pid: record.pid, socketPath: record.socketPath) else {
             // Either gone, or the PID now belongs to something else entirely. Either way
             // the record is stale and killing anything would be wrong.
             clear()
+            return nil
+        }
+        return record
+    }
+
+    /// Terminate a daemon confirmed by `reapableOrphan()`, revalidating first.
+    ///
+    /// Returns the PID killed, or nil if it is no longer ours.
+    ///
+    /// **The recheck is the point.** Splitting identify-then-kill so an unmount can
+    /// happen in between opened a window that did not exist before: unmounting a
+    /// wedged volume can take a minute, and in that time the orphan can exit and its
+    /// PID be reused. Signalling the recorded PID on the strength of a check made
+    /// before the unmount would eventually kill an unrelated process — the same PID
+    /// reuse hazard `isOurDaemon` exists to close, reintroduced by the fix for it.
+    @discardableResult
+    public func reap(_ record: Record) async -> Int32? {
+        guard await Self.isOurDaemon(pid: record.pid, socketPath: record.socketPath) else {
+            // It exited on its own, or the PID is someone else's now. Either way there
+            // is nothing of ours to kill, and the record is spent.
+            clear()
+            try? FileManager.default.removeItem(atPath: record.socketPath)
             return nil
         }
 
@@ -69,6 +97,17 @@ public struct DaemonPidFile: Sendable {
         clear()
         try? FileManager.default.removeItem(atPath: record.socketPath)
         return record.pid
+    }
+
+    /// Identify and terminate in one step, with nothing in between.
+    ///
+    /// Only for callers that own no mounts. Anything that might have mounts served by
+    /// this daemon must use `reapableOrphan()` and `reap(_:)` with an unmount between
+    /// them.
+    @discardableResult
+    public func reapOrphan() async -> Int32? {
+        guard let record = await reapableOrphan() else { return nil }
+        return await reap(record)
     }
 
     /// True only if the PID is live, is an rclone process, and its command line names the

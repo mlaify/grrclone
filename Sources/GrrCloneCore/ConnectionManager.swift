@@ -26,6 +26,46 @@ public actor ConnectionManager {
         self.transports = Dictionary(uniqueKeysWithValues: transports.map { ($0.kind, $0) })
     }
 
+    /// Teach the supervisor to bring our mounts down before it kills an orphaned
+    /// daemon.
+    ///
+    /// Call once, after construction and before the first `start()`. Without it the
+    /// supervisor kills the orphan out from under live mounts and the kernel is left
+    /// talking to a dead NFS server. It is wired here rather than left to each caller
+    /// because `start()` is reached from a dozen places and one missed call site
+    /// reintroduces the bug silently.
+    ///
+    /// Weak so the supervisor holding this closure does not keep the manager alive.
+    public func installOrphanCleanup() async {
+        await supervisor.setOrphanCleanup { [weak self] in
+            // A manager that has gone away cannot vouch for anything, so it must not
+            // report a clean sweep. `.nothingToDo` would authorise the kill.
+            guard let self else { return .init(stillMounted: ["<unknown>"]) }
+            return await self.unmountRecordedMounts()
+        }
+    }
+
+    /// Unmount every mount the registry records as ours and is still in the mount
+    /// table, reporting both what came down and what would not.
+    ///
+    /// Used both by startup reconciliation and, crucially, as the orphan cleanup that
+    /// runs before a leftover daemon is killed. Needs no daemon of its own: ownership
+    /// comes from the registry and the unmount goes through `diskutil`.
+    ///
+    /// A thrown error is reported as "everything might still be mounted" rather than
+    /// swallowed into an empty success. The caller uses this to decide whether killing
+    /// the daemon is safe, so an unreadable registry or mount table must not look like
+    /// a clean sweep.
+    public func unmountRecordedMounts() async -> DaemonSupervisor.OrphanCleanupOutcome {
+        do {
+            let report = try await reconcileOrphans()
+            return .init(unmounted: report.cleaned, stillMounted: report.stillMounted)
+        } catch {
+            let owned = await registry.all.map(\.mountPoint)
+            return .init(unmounted: [], stillMounted: owned)
+        }
+    }
+
     public static func defaultCacheRoot() -> URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("org.mlaify.grrclone", isDirectory: true)
@@ -90,16 +130,29 @@ public actor ConnectionManager {
         guard let mount = active[connectionID] else { return }
         guard let transport = transports[mount.connection.transport] else { return }
 
+        // The unmount is the step that can fail meaningfully. If it throws we keep the
+        // connection active and the registry entry intact, because the mount is still
+        // up and we still own it.
         try await transport.unmount(at: mount.mountPoint)
 
         if let client = try? await supervisor.requireClient() {
             try? await client.stopServer(id: mount.serverID)
         }
-        try await registry.forget(mountPoint: mount.mountPoint.path)
+
+        // Past here the mount is down, so in-memory state must follow regardless of
+        // whether the registry write succeeds. Letting a failed `forget()` throw
+        // before this line left the connection marked active with nothing mounted:
+        // the UI kept showing it connected, and at quit `shutdown()` tried to unmount
+        // it again, failed, and left the daemon running for a mount that no longer
+        // existed.
         active[connectionID] = nil
         await recordLiveMounts()
-
         Self.removeIfEmpty(mount.mountPoint.path)
+
+        // Reported, not swallowed: a stale entry means the next launch will try to
+        // unmount a path that is already gone. Harmless, but the user should not have
+        // to infer it.
+        try await registry.forget(mountPoint: mount.mountPoint.path)
     }
 
     /// Remove a mount point directory we created, but only when it is empty. If an
@@ -111,7 +164,7 @@ public actor ConnectionManager {
     /// for is the one where shutdown never runs.
     private func recordLiveMounts() async {
         let paths = active.values.map(\.mountPoint.path).sorted()
-        await supervisor.session.update(mountPoints: paths)
+        supervisor.session.update(mountPoints: paths)
     }
 
     /// Remove an empty mountpoint, or protect it if it has to stay.

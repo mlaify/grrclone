@@ -38,9 +38,41 @@ public actor MountRegistry {
     private let fileURL: URL
     private var entries: [Entry] = []
 
+    /// Set when the registry file exists but could not be read.
+    ///
+    /// This is not the same as an empty registry, and the difference is the whole
+    /// point of the type. An absent file legitimately means "nothing mounted". An
+    /// unreadable one means "we do not know what we own" — and since ownership is the
+    /// only thing that authorises an unmount, treating it as "nothing" silently
+    /// disowns every live mount: `owns()` goes false, `shutdown()` skips them, and
+    /// `reconcileOrphans()` returns early on an empty list.
+    ///
+    /// The realistic trigger is not disk damage but a schema change: add one
+    /// non-optional field to `Entry` and every existing record stops decoding.
+    private(set) public var loadFailure: String?
+
     public init(fileURL: URL) {
         self.fileURL = fileURL
-        self.entries = (try? Self.load(from: fileURL)) ?? []
+        do {
+            self.entries = try Self.load(from: fileURL)
+        } catch {
+            // Keep the unreadable file rather than overwriting it. It is the only
+            // record of what might still be mounted, and a human can read JSON.
+            self.entries = []
+            self.loadFailure = error.localizedDescription
+            Self.quarantine(fileURL)
+        }
+    }
+
+    /// Move an unreadable registry aside so a human can inspect it, and so the next
+    /// write starts from a known-empty file instead of failing forever.
+    private static func quarantine(_ url: URL) {
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withFullDate]
+        let aside = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.lastPathComponent).unreadable-\(stamp.string(from: Date()))")
+        try? FileManager.default.removeItem(at: aside)
+        try? FileManager.default.moveItem(at: url, to: aside)
     }
 
     public static func defaultURL() -> URL {
@@ -92,6 +124,8 @@ public actor MountRegistry {
         try data.write(to: fileURL, options: .atomic)
     }
 
+    /// Throws when the file exists but cannot be read. Absent is empty; unreadable is
+    /// unknown, and the caller must be able to tell them apart.
     private static func load(from url: URL) throws -> [Entry] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let decoder = JSONDecoder()
