@@ -3,11 +3,11 @@
 A running record of what is done, what is next, and which decisions are settled.
 Update this at the end of each working session.
 
-Last updated: 2026-09-17.
+Last updated: 2026-09-18.
 
 ## Where things stand
 
-**v0.2.0 is released**, and installable two ways:
+**v0.3.2 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-113 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+191 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -28,11 +28,45 @@ did not before, and which was proved rather than assumed.
 | M1 — headless core | **Done.** Verified end to end against real remotes |
 | M2 — menu bar app | **Done.** Connects, disconnects, connects at login |
 | M3 — robustness and release | **Done.** Self-healing, quit safety, CI, and a notarised DMG |
-| M4 — reach | Started. Homebrew distribution done; add-remote wizard and WebDAV transport open |
+| M4 — reach | **Done**, bar one item. Homebrew tap, add-remote wizard with OAuth; WebDAV transport built and rejected; homebrew-cask upstream blocked on notability |
 | v0.1.0 | **Released** 2026-09-17 |
 | v0.2.0 | **Released** 2026-09-17 |
+| v0.3.0 | **Released** 2026-09-17 |
+| v0.3.1 | **Released** 2026-09-17 |
+| v0.3.2 | **Released** 2026-09-18 |
 
 ## Releases
+
+### v0.3.2 — 2026-09-18
+
+Changed: every explanatory line in Settings was cut to one line or less. The text was
+accurate and nobody was reading it.
+
+### v0.3.1 — 2026-09-17
+
+Fixed: the add-remote wizard was unusable in the shipped build. Two independent causes,
+both invisible in tests. A sheet presented from a `MenuBarExtra` popover dismissed the
+popover, taking the sheet with it — so the provider dropdown closed the moment it was
+clicked. And rclone chunks large rc replies; `config/providers` is large, and the unix
+socket client assumed `Connection: close` meant EOF always delimited the body, so the
+provider list arrived truncated. The wizard now opens in the Settings window, and the
+client decodes chunked transfer encoding.
+
+### v0.3.0 — 2026-09-17
+
+Added: an add-remote wizard generated from the rc `config/providers` endpoint — 69
+providers, 968 options, no hand-written per-backend forms. OAuth backends complete in
+the browser without a terminal, driven through rclone's own interactive config state
+machine. An offer to encrypt `rclone.conf`, with the password optionally in the
+keychain.
+
+Changed: the UI no longer implies stored credentials are encrypted. `rclone obscure` is
+obfuscation, not encryption, and said so nowhere the user would see it.
+
+Documented: that `soft` trades a hang for an I/O error after roughly two minutes, and
+what grrclone cannot fix — local-only locks, AppleDouble sidecars. WebDAV/NetFS was
+built, measured against NFS, and dropped; the reasoning is recorded so it is not
+rebuilt.
 
 ### v0.2.0 — 2026-09-17
 
@@ -299,28 +333,36 @@ Each item is also a [GitHub issue](https://github.com/mlaify/grrclone/issues), w
 the unit of work — but the backlog is recorded here too, so this file remains a
 complete account of the project without needing GitHub open.
 
-1. **Add-remote wizard** ([#26](https://github.com/mlaify/grrclone/issues/26)). The one
-   that changes who can use grrclone: today a new user still needs `rclone config` in a
-   terminal before the app is any use to them, which is a hard stop for the audience it
-   is for. The form must be generated from the rc `config/providers` endpoint and never
-   hand-written per backend — the current build reports 1,147 options across all
-   providers, so a hand-maintained version is wrong the day rclone ships a new one.
-   OAuth should use rclone's own browser flow; `config/create` builds the remote.
+Issues are grouped into milestones. Release milestones are closed once the release
+ships, so they read as history; the two non-release milestones never close, because the
+things in them are not waiting on us.
 
-2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28)).
-   Blocked on notability alone — 75 stars, or 30 forks, or 30 watchers. The cask passes
-   `brew audit` otherwise; only that rule fails, which is circular for a project
-   Homebrew would help people find. The tap covers it meanwhile and the same cask goes
-   upstream unchanged when the bar is met.
+| Milestone | Holds | State |
+|---|---|---|
+| `v0.2.0` | Bandwidth limit, log viewer, opt-in update checks, crash-left-mountpoint fix | closed, shipped 2026-09-17 |
+| `v0.3.0` | Add-remote wizard, OAuth without a terminal, config encryption offer, soft-mount docs | closed, shipped 2026-09-17 |
+| `v0.4.0` | Remote lifecycle management | open |
+| `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
+| `Known limitations` | Documented, deliberately not fixed | never closes |
 
-3. **Document the soft-mount tradeoff**
-   ([#42](https://github.com/mlaify/grrclone/issues/42)). Say plainly that `soft` trades
-   a hang for an I/O error after roughly two minutes, and that `--vfs-cache-mode full`
-   absorbs most of it because writes land in the local cache first. Documentation only;
-   `soft` is settled and right.
+Remaining work:
 
-Known limitations with no fix available are filed so they can be pointed at rather than
-re-investigated each time someone notices them:
+1. **Delete a remote** ([#69](https://github.com/mlaify/grrclone/issues/69), `v0.4.0`).
+   The last obvious gap in the wizard's story: grrclone can add a remote but not remove
+   one. It has to unmount first, flush pending uploads, and leave every *other* remote
+   untouched — including its password. `config/delete` was tested directly and behaves:
+   the surviving remote's password revealed byte-identically, the file stayed encrypted,
+   and deleting against a locked config failed with the file unchanged by hash. The work
+   is the UI, the warning, and the tests that prove all of that stays true.
+
+2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
+   `Blocked on adoption`). Blocked on notability alone — 75 stars, or 30 forks, or 30
+   watchers. The cask passes `brew audit` otherwise; only that rule fails, which is
+   circular for a project Homebrew would help people find. The tap covers it meanwhile
+   and the same cask goes upstream unchanged when the bar is met.
+
+Known limitations with no fix available are filed under `Known limitations` so they can
+be pointed at rather than re-investigated each time someone notices them:
 
 - **Locks are local only** ([#41](https://github.com/mlaify/grrclone/issues/41)).
   `nolocks,locallocks` is what stops anything taking an `fcntl` lock hanging forever on
@@ -334,6 +376,10 @@ re-investigated each time someone notices them:
   FUSE flag that does not exist on `serve nfs`, and filters govern what rclone reads,
   not what the VFS writes back. The related `.DS_Store` problem **is** solved, in
   Settings.
+- **WebDAV/NetFS as an option** ([#27](https://github.com/mlaify/grrclone/issues/27)).
+  Built, measured, rejected — it bought nothing NFS does not already give
+  (`volumeIsEjectable=false` either way). Filed here rather than reopened when someone
+  next wonders whether it would help.
 
 ## Settled decisions
 
@@ -428,9 +474,8 @@ Do not re-litigate these without new evidence. Reasoning is in
 - Is one daemon for all connections right? It is simpler, but one rclone crash drops
   every mount at once. Per-connection daemons would isolate failures at the cost of
   memory and complexity.
-- Does the WebDAV/NetFS transport earn its place? It gives `/Volumes` mounting with an
-  eject button and no root, which NFS cannot, but macOS's WebDAV client stages whole
-  files locally before upload and degrades badly on large directories.
+(The WebDAV/NetFS question is settled — built, measured, rejected. See the entry under
+[Known limitations](#next) and the 2026-09-17 session note below.)
 
 ## Hard-won lessons
 
