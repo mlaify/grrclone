@@ -7,7 +7,7 @@ Last updated: 2026-09-18.
 
 ## Where things stand
 
-**v0.3.2 is released**, and installable two ways:
+**v0.4.0 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-191 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+230 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -34,8 +34,42 @@ did not before, and which was proved rather than assumed.
 | v0.3.0 | **Released** 2026-09-17 |
 | v0.3.1 | **Released** 2026-09-17 |
 | v0.3.2 | **Released** 2026-09-18 |
+| v0.4.0 | **Released** 2026-09-18 |
 
 ## Releases
+
+### v0.4.0 — 2026-09-18
+
+Almost entirely correctness and security work, on paths that can lose data. It came
+out of a full-codebase audit rather than from use, which is worth saying: none of
+these were reported, and two of them had shipped.
+
+Fixed, in order of how badly they could have gone:
+
+- A daemon left behind by a crash was killed **before** the volumes it was serving
+  were unmounted, leaving macOS talking to a storage server that no longer existed.
+  `soft,intr` bounded it to I/O errors rather than a wedge, which is exactly why it
+  went unnoticed through two releases.
+- A damaged record of which volumes grrclone had mounted read as "we mounted
+  nothing", silently disowning live mounts so that quitting left them connected to
+  nothing. The realistic trigger was not disk damage but adding a field to the record.
+- The log viewer did not redact `Authorization` headers, cookies or AWS signatures, so
+  an OAuth token could survive into a log a user was invited to copy into a bug report.
+- **Read only** could appear to be on for a volume that was still accepting writes,
+  because settings edited while mounted were saved and never applied.
+- A discarded `SecRandomCopyBytes` status would have made both control-socket
+  credentials a fixed string.
+- Settings claimed the configuration was unencrypted when it had merely failed to read
+  it.
+
+Added: deleting a remote, with the four ways that can lose data each closed —
+unfinished uploads, teardown ordering, the configuration rewrite, and the keychain
+entry that must not be touched. And `CHANGELOG.md`, updated per pull request rather
+than reconstructed at release time.
+
+The README now states the four things no other rclone GUI does, all of which already
+existed and none of which were being claimed: registry-based mount ownership, the
+hardened mount options, redaction on ingest, and a CI-enforced privacy guarantee.
 
 ### v0.3.2 — 2026-09-18
 
@@ -341,25 +375,49 @@ things in them are not waiting on us.
 |---|---|---|
 | `v0.2.0` | Bandwidth limit, log viewer, opt-in update checks, crash-left-mountpoint fix | closed, shipped 2026-09-17 |
 | `v0.3.0` | Add-remote wizard, OAuth without a terminal, config encryption offer, soft-mount docs | closed, shipped 2026-09-17 |
-| `v0.4.0` | Remote lifecycle management | open |
+| `v0.4.0` | Audit fixes, delete a remote, the changelog | closed, shipped 2026-09-18 |
+| `v0.5.0` | Transfer visibility, remote editing, cache control | open |
 | `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
 | `Known limitations` | Documented, deliberately not fixed | never closes |
 
 Remaining work:
 
-1. **Delete a remote** ([#69](https://github.com/mlaify/grrclone/issues/69), `v0.4.0`).
-   The last obvious gap in the wizard's story: grrclone can add a remote but not remove
-   one. It has to unmount first, flush pending uploads, and leave every *other* remote
-   untouched — including its password. `config/delete` was tested directly and behaves:
-   the surviving remote's password revealed byte-identically, the file stayed encrypted,
-   and deleting against a locked config failed with the file unchanged by hash. The work
-   is the UI, the warning, and the tests that prove all of that stays true.
+1. **Transfer progress is fetched but never shown**
+   ([#81](https://github.com/mlaify/grrclone/issues/81), `v0.5.0`). `core/stats` and
+   `vfs/queue` are already implemented in the rc client and nothing consumes them, so
+   the app can say "3 uploads pending" but not what, how fast, or how long. It is the
+   most visible gap against Mountain Duck and ExpanDrive, and the client work is done.
 
-2. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
+2. **A remote's subpath cannot be set in the UI**
+   ([#82](https://github.com/mlaify/grrclone/issues/82), `v0.5.0`). `Connection.path`
+   exists and `fsSpec` composes it correctly; no view exposes it, so every connection
+   mounts the whole remote.
+
+3. **An existing remote cannot be edited**
+   ([#83](https://github.com/mlaify/grrclone/issues/83), `v0.5.0`). A rotated S3 key
+   currently means delete and re-create. `config/update` is already in the client; the
+   work is a form pre-filled from `config/dump`, which returns obscured secrets and
+   must not display or re-obscure them wrongly.
+
+4. **No way to see or reclaim the VFS cache**
+   ([#84](https://github.com/mlaify/grrclone/issues/84), `v0.5.0`). Three remotes can
+   quietly hold 60 GB with nothing reporting it. The substance is the safety
+   interlock — a purge must refuse while anything is dirty — not the display.
+
+5. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
    `Blocked on adoption`). Blocked on notability alone — 75 stars, or 30 forks, or 30
    watchers. The cask passes `brew audit` otherwise; only that rule fails, which is
    circular for a project Homebrew would help people find. The tap covers it meanwhile
    and the same cask goes upstream unchanged when the bar is met.
+
+6. **Mounts cannot land in `/Volumes`**
+   ([#85](https://github.com/mlaify/grrclone/issues/85), `Blocked on adoption`). The
+   most visible remaining difference in how the product *feels* against the paid
+   alternatives. Deferred on cost rather than difficulty: `/Volumes` is `root:wheel`
+   755, so creating the directory needs a privileged helper — a second signed
+   executable, an authorisation prompt that cuts against "asks for nothing", and
+   `diskarbitrationd` pruning the directory on every boot. Worth doing only if people
+   actually ask.
 
 Known limitations with no fix available are filed under `Known limitations` so they can
 be pointed at rather than re-investigated each time someone notices them:
