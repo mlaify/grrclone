@@ -28,13 +28,34 @@ final class OrphanReapOrderTests: XCTestCase {
                           "test socket path must fit Darwin's limit")
     }
 
-    override func tearDownWithError() throws {
+    /// Async, and it awaits every supervisor it started.
+    ///
+    /// The first version used `defer { Task { await supervisor.stop() } }` inside each
+    /// test. That is fire-and-forget: the test method returns before the task runs, so
+    /// real `rclone rcd` processes outlived the test binary and accumulated across
+    /// runs — which then made the suite fail intermittently for reasons that had
+    /// nothing to do with the code under test. A teardown that does not wait is not a
+    /// teardown.
+    override func tearDown() async throws {
+        for supervisor in supervisors { await supervisor.stop() }
+        supervisors = []
         for pid in spawned where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
         spawned = []
         try? FileManager.default.removeItem(at: dir)
     }
 
     private var spawned: [Int32] = []
+    private var supervisors: [DaemonSupervisor] = []
+
+    /// Every supervisor a test starts goes through here, so tearDown can stop it.
+    private func makeSupervisor(binary: URL) -> DaemonSupervisor {
+        let supervisor = DaemonSupervisor(
+            binary: binary,
+            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
+            runtimeDirectory: dir)
+        supervisors.append(supervisor)
+        return supervisor
+    }
 
     /// A stand-in for a leftover daemon.
     ///
@@ -107,17 +128,13 @@ final class OrphanReapOrderTests: XCTestCase {
         try pidFile.write(pid: orphanPID, socketPath: socket)
 
         let observed = OrphanObserver()
-        let supervisor = DaemonSupervisor(
-            binary: rclone,
-            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
-            runtimeDirectory: dir)
+        let supervisor = makeSupervisor(binary: rclone)
         await supervisor.setOrphanCleanup {
             await observed.record(orphanAlive: kill(orphanPID, 0) == 0)
             return .init(unmounted: ["/fake/mountpoint"])
         }
 
         _ = try await supervisor.start()
-        defer { Task { await supervisor.stop() } }
 
         let ran = await observed.ran
         let aliveWhenCalled = await observed.orphanWasAlive
@@ -135,17 +152,13 @@ final class OrphanReapOrderTests: XCTestCase {
     func testCleanupDoesNotRunWithoutAnOrphan() async throws {
         let rclone = try requireRclone()
         let observed = OrphanObserver()
-        let supervisor = DaemonSupervisor(
-            binary: rclone,
-            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
-            runtimeDirectory: dir)
+        let supervisor = makeSupervisor(binary: rclone)
         await supervisor.setOrphanCleanup {
             await observed.record(orphanAlive: false)
             return .nothingToDo
         }
 
         _ = try await supervisor.start()
-        defer { Task { await supervisor.stop() } }
 
         let ran = await observed.ran
         XCTAssertFalse(ran, "nothing to reap means nothing to unmount")
@@ -167,10 +180,7 @@ final class OrphanReapOrderTests: XCTestCase {
         let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
         try pidFile.write(pid: orphanPID, socketPath: socket)
 
-        let supervisor = DaemonSupervisor(
-            binary: rclone,
-            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
-            runtimeDirectory: dir)
+        let supervisor = makeSupervisor(binary: rclone)
         await supervisor.setOrphanCleanup {
             .init(unmounted: [], stillMounted: ["/Users/x/grrclone/dav1"])
         }
@@ -199,10 +209,7 @@ final class OrphanReapOrderTests: XCTestCase {
         let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
         try pidFile.write(pid: orphanPID, socketPath: socket)
 
-        let supervisor = DaemonSupervisor(
-            binary: rclone,
-            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
-            runtimeDirectory: dir)
+        let supervisor = makeSupervisor(binary: rclone)
         await supervisor.setOrphanCleanup { .init(stillMounted: ["<unknown>"]) }
 
         _ = try? await supervisor.start()

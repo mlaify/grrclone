@@ -132,11 +132,20 @@ final class DaemonLogBufferTests: XCTestCase {
         XCTAssertFalse(bearer.contains("ya29.a0AfB_REAL_TOKEN"), bearer)
         XCTAssertTrue(bearer.contains("Bearer"), "the scheme is useful when diagnosing auth")
 
-        let basic = DaemonLog.redact("Authorization: Basic ZGF2MTpzdXBlcnNlY3JldA==")
-        XCTAssertFalse(basic.contains("ZGF2MTpzdXBlcnNlY3JldA=="), basic)
+        // Built at runtime rather than written out.
+        //
+        // An earlier version pasted a literal `Basic <base64>` into the source. It was
+        // fake, but it is credential-*shaped*: GitHub's secret scanner flagged it, and
+        // a reader has no way to tell a fabricated one from a real one. Encoding it
+        // here keeps the realistic base64 the regex has to cope with, without any
+        // string in the file that looks like a credential.
+        let encoded = Data("example-user:example-password".utf8).base64EncodedString()
 
-        let proxy = DaemonLog.redact("Proxy-Authorization: Basic c2VjcmV0")
-        XCTAssertFalse(proxy.contains("c2VjcmV0"), proxy)
+        let basic = DaemonLog.redact("Authorization: Basic \(encoded)")
+        XCTAssertFalse(basic.contains(encoded), basic)
+
+        let proxy = DaemonLog.redact("Proxy-Authorization: Basic \(encoded)")
+        XCTAssertFalse(proxy.contains(encoded), proxy)
     }
 
     func testCookiesAreRedacted() {
