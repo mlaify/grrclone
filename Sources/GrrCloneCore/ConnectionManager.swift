@@ -269,6 +269,153 @@ public actor ConnectionManager {
         return outcome
     }
 
+    // MARK: - Deleting a remote
+
+    /// Why a deletion was refused, or what it achieved.
+    public enum DeletionRefusal: Error, LocalizedError {
+        case pendingUploads(files: [String])
+        case cacheUnreadable
+        case noSuchRemote(String)
+        case stillMounted(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .pendingUploads(let files):
+                let sample = files.prefix(3).joined(separator: ", ")
+                let more = files.count > 3 ? ", and \(files.count - 3) more" : ""
+                return "\(files.count) file(s) saved to this remote have not finished "
+                     + "uploading yet: \(sample)\(more). Deleting now would lose them, "
+                     + "because the only copy is in the local cache. Connect the remote "
+                     + "and wait for uploads to finish, then try again."
+            case .cacheUnreadable:
+                return "grrclone could not read this remote's local cache, so it cannot "
+                     + "tell whether anything is still waiting to upload. It will not "
+                     + "delete a cache it cannot account for."
+            case .noSuchRemote(let name):
+                return "There is no remote called \(name) in your rclone configuration."
+            case .stillMounted(let path):
+                return "\(path) could not be disconnected, so the remote was not "
+                     + "deleted. Nothing has been changed."
+            }
+        }
+    }
+
+    public struct DeletionOutcome: Sendable, Equatable {
+        /// Where the configuration was copied before it was rewritten.
+        public var backup: URL
+        /// The mountpoint taken down on the way, if it was connected.
+        public var unmounted: String?
+        /// True when the local cache was removed.
+        public var cachePurged: Bool
+    }
+
+    /// Where rclone keeps its VFS cache, asked of the daemon.
+    ///
+    /// **Not `self.cacheRoot`.** That is grrclone's own root, passed to `serve/start`
+    /// for the NFS handle cache. rclone's VFS cache lives under its `--cache-dir`,
+    /// which is set from `DaemonSettings` and is a different value that merely happens
+    /// to default to the same path. Reading the wrong one would report "nothing
+    /// pending" for a cache full of unsent writes — a fail-open on the check that
+    /// protects the user's data, hidden behind two settings that agree today.
+    ///
+    /// `config/paths` is the authority, so the two cannot drift.
+    private func rcloneCacheRoot() async throws -> URL {
+        let client = try await supervisor.requireClient()
+        let paths = try await client.configPaths()
+        guard !paths.cache.isEmpty else { throw DeletionRefusal.cacheUnreadable }
+        return URL(fileURLWithPath: paths.cache)
+    }
+
+    /// What deleting this remote would refuse on, without doing anything.
+    ///
+    /// Exposed so the confirmation dialog can show the real obstacle before the user
+    /// commits, rather than letting them type a name and then be told no.
+    public func pendingUploads(for connection: Connection) async -> PendingUploads {
+        guard let root = try? await rcloneCacheRoot() else {
+            return PendingUploads(inspectionFailed: true)
+        }
+        return VFSCache.pendingUploads(cacheRoot: root, fsSpec: connection.fsSpec)
+    }
+
+    /// Remove a remote from rclone's configuration, and grrclone's cache of it.
+    ///
+    /// The order is the same one every other teardown path in this type uses, for the
+    /// same reasons, and it is not interchangeable:
+    ///
+    /// 1. **Refuse if anything is still uploading.** `--vfs-cache-mode full` returns
+    ///    from a write as soon as the bytes are on local disk, so the cache can hold
+    ///    the only copy of a file. This is the step that protects the user's own work,
+    ///    and it fails closed: a cache that cannot be read counts as "unknown", not
+    ///    "empty".
+    /// 2. **Unmount, then stop the server** — via `disconnect`, rather than
+    ///    reimplemented here. Stopping the server first leaves the kernel talking to a
+    ///    dead NFS server and hangs Finder.
+    /// 3. **Back up `rclone.conf`.** Taken here and not earlier: nothing above this
+    ///    line writes to that file, so an earlier copy would only litter backups for
+    ///    deletions that were refused.
+    /// 4. **Delete the remote**, then the local cache.
+    ///
+    /// The keychain is deliberately untouched. It holds the password for the
+    /// *configuration file*, keyed by config path — not this remote's credentials.
+    /// Removing it because the last remote went away would lock the user out of a
+    /// config they still have. See #56.
+    ///
+    /// - Parameter force: skip only the pending-upload refusal, for a user who has
+    ///   been shown the list and chosen to discard it. Nothing else is skippable.
+    public func deleteRemote(_ connection: Connection,
+                             configPath: String,
+                             force: Bool = false) async throws -> DeletionOutcome {
+        let client = try await supervisor.requireClient()
+
+        // Fail before touching anything if the remote is not there. This also avoids
+        // leaving a backup behind for a deletion that was never possible.
+        let remotes = try await client.listRemotes()
+        guard remotes.contains(connection.remote) else {
+            throw DeletionRefusal.noSuchRemote(connection.remote)
+        }
+
+        let cacheRoot = try await rcloneCacheRoot()
+
+        if !force {
+            let pending = VFSCache.pendingUploads(cacheRoot: cacheRoot,
+                                                  fsSpec: connection.fsSpec)
+            if pending.inspectionFailed { throw DeletionRefusal.cacheUnreadable }
+            if !pending.dirtyFiles.isEmpty {
+                throw DeletionRefusal.pendingUploads(files: pending.dirtyFiles)
+            }
+        }
+
+        var unmounted: String?
+        if let mount = active[connection.id] {
+            let path = mount.mountPoint.path
+            do {
+                try await disconnect(connection.id)
+            } catch {
+                // Leave everything as it was. A remote whose volume is still mounted
+                // must keep its configuration, or the mount has no server to go back
+                // to and no way to be recreated.
+                throw DeletionRefusal.stillMounted(path)
+            }
+            unmounted = path
+        }
+
+        let backup = try ConfigBackup.make(configPath: configPath)
+        try await client.deleteRemote(name: connection.remote)
+
+        // Last, and allowed to fail without failing the deletion. The remote is gone
+        // from the configuration by this point; a cache directory that could not be
+        // removed is disk space, not a correctness problem, and reporting the whole
+        // operation as failed would be wrong.
+        var purged = true
+        do {
+            try VFSCache.purge(cacheRoot: cacheRoot, fsSpec: connection.fsSpec)
+        } catch {
+            purged = false
+        }
+
+        return DeletionOutcome(backup: backup, unmounted: unmounted, cachePurged: purged)
+    }
+
     // MARK: - Reconciliation
 
     public struct ReconcileReport: Sendable {

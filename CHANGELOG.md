@@ -11,6 +11,15 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Added
+
+- **Delete a remote**, from its page in Settings. grrclone refuses while any file is
+  still waiting to upload — the local cache holds the only copy of those — disconnects
+  the volume first, and copies your rclone configuration alongside itself before
+  changing it. Your files on the storage provider are never touched, and the
+  confirmation says so before anything else.
+  ([#69](https://github.com/mlaify/grrclone/issues/69))
+
 ### Fixed
 
 - A daemon left behind by a crash is no longer killed before the volumes it is serving

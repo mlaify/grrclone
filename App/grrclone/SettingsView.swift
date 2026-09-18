@@ -64,6 +64,9 @@ struct SettingsView: View {
         .sheet(isPresented: $model.showAddRemote) {
             AddRemoteWizard(model: model)
         }
+        .sheet(item: $model.deletingConnection) { connection in
+            DeleteRemoteSheet(connection: connection, model: model)
+        }
         // Land on something useful. Opening to an empty pane and a "Choose…" prompt
         // makes the user do a step the app can do for them, and with one remote
         // configured there is nothing to choose.
@@ -255,6 +258,23 @@ private struct ConnectionDetail: View {
                         Button("Remount") { model.remount(connection) }
                     }
                 }
+            }
+
+            // Destructive actions live at the bottom, apart from the everyday ones.
+            // A Delete sitting beside Disconnect invites the mis-click, and the two
+            // words mean very different things.
+            Section {
+                HStack {
+                    Button("Delete Remote…", role: .destructive) {
+                        model.beginDeleting(connection)
+                    }
+                    Spacer()
+                }
+            } footer: {
+                Text("Removes the connection and its saved credentials. Your files on "
+                     + "the storage provider are not touched.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
