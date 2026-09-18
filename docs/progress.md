@@ -7,7 +7,7 @@ Last updated: 2026-09-18.
 
 ## Where things stand
 
-**v0.3.2 is released**, and installable two ways:
+**v0.4.0 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-191 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+230 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -34,8 +34,42 @@ did not before, and which was proved rather than assumed.
 | v0.3.0 | **Released** 2026-09-17 |
 | v0.3.1 | **Released** 2026-09-17 |
 | v0.3.2 | **Released** 2026-09-18 |
+| v0.4.0 | **Released** 2026-09-18 |
 
 ## Releases
+
+### v0.4.0 — 2026-09-18
+
+Almost entirely correctness and security work, on paths that can lose data. It came
+out of a full-codebase audit rather than from use, which is worth saying: none of
+these were reported, and two of them had shipped.
+
+Fixed, in order of how badly they could have gone:
+
+- A daemon left behind by a crash was killed **before** the volumes it was serving
+  were unmounted, leaving macOS talking to a storage server that no longer existed.
+  `soft,intr` bounded it to I/O errors rather than a wedge, which is exactly why it
+  went unnoticed through two releases.
+- A damaged record of which volumes grrclone had mounted read as "we mounted
+  nothing", silently disowning live mounts so that quitting left them connected to
+  nothing. The realistic trigger was not disk damage but adding a field to the record.
+- The log viewer did not redact `Authorization` headers, cookies or AWS signatures, so
+  an OAuth token could survive into a log a user was invited to copy into a bug report.
+- **Read only** could appear to be on for a volume that was still accepting writes,
+  because settings edited while mounted were saved and never applied.
+- A discarded `SecRandomCopyBytes` status would have made both control-socket
+  credentials a fixed string.
+- Settings claimed the configuration was unencrypted when it had merely failed to read
+  it.
+
+Added: deleting a remote, with the four ways that can lose data each closed —
+unfinished uploads, teardown ordering, the configuration rewrite, and the keychain
+entry that must not be touched. And `CHANGELOG.md`, updated per pull request rather
+than reconstructed at release time.
+
+The README now states the four things no other rclone GUI does, all of which already
+existed and none of which were being claimed: registry-based mount ownership, the
+hardened mount options, redaction on ingest, and a CI-enforced privacy guarantee.
 
 ### v0.3.2 — 2026-09-18
 
