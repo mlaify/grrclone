@@ -38,19 +38,32 @@ public actor ConnectionManager {
     /// Weak so the supervisor holding this closure does not keep the manager alive.
     public func installOrphanCleanup() async {
         await supervisor.setOrphanCleanup { [weak self] in
-            guard let self else { return [] }
+            // A manager that has gone away cannot vouch for anything, so it must not
+            // report a clean sweep. `.nothingToDo` would authorise the kill.
+            guard let self else { return .init(stillMounted: ["<unknown>"]) }
             return await self.unmountRecordedMounts()
         }
     }
 
     /// Unmount every mount the registry records as ours and is still in the mount
-    /// table. Returns the paths brought down.
+    /// table, reporting both what came down and what would not.
     ///
     /// Used both by startup reconciliation and, crucially, as the orphan cleanup that
     /// runs before a leftover daemon is killed. Needs no daemon of its own: ownership
     /// comes from the registry and the unmount goes through `diskutil`.
-    public func unmountRecordedMounts() async -> [String] {
-        (try? await reconcileOrphans().cleaned) ?? []
+    ///
+    /// A thrown error is reported as "everything might still be mounted" rather than
+    /// swallowed into an empty success. The caller uses this to decide whether killing
+    /// the daemon is safe, so an unreadable registry or mount table must not look like
+    /// a clean sweep.
+    public func unmountRecordedMounts() async -> DaemonSupervisor.OrphanCleanupOutcome {
+        do {
+            let report = try await reconcileOrphans()
+            return .init(unmounted: report.cleaned, stillMounted: report.stillMounted)
+        } catch {
+            let owned = await registry.all.map(\.mountPoint)
+            return .init(unmounted: [], stillMounted: owned)
+        }
     }
 
     public static func defaultCacheRoot() -> URL {

@@ -113,7 +113,7 @@ final class OrphanReapOrderTests: XCTestCase {
             runtimeDirectory: dir)
         await supervisor.setOrphanCleanup {
             await observed.record(orphanAlive: kill(orphanPID, 0) == 0)
-            return ["/fake/mountpoint"]
+            return .init(unmounted: ["/fake/mountpoint"])
         }
 
         _ = try await supervisor.start()
@@ -141,7 +141,7 @@ final class OrphanReapOrderTests: XCTestCase {
             runtimeDirectory: dir)
         await supervisor.setOrphanCleanup {
             await observed.record(orphanAlive: false)
-            return []
+            return .nothingToDo
         }
 
         _ = try await supervisor.start()
@@ -149,6 +149,89 @@ final class OrphanReapOrderTests: XCTestCase {
 
         let ran = await observed.ran
         XCTAssertFalse(ran, "nothing to reap means nothing to unmount")
+    }
+
+    // MARK: - Reaping is conditional (Codex, P1)
+
+    /// If the cleanup could not bring a mount down, the daemon must be left alive.
+    ///
+    /// The first version of this fix returned only the list of paths successfully
+    /// unmounted, so a `diskutil` failure was indistinguishable from "nothing to do"
+    /// and the orphan was killed regardless — straight back into the dead-server state
+    /// the whole ordering exists to prevent.
+    func testOrphanSurvivesWhenCleanupCannotUnmount() async throws {
+        let rclone = try requireRclone()
+        let socket = dir.appendingPathComponent("rc.sock").path
+        let orphanPID = try spawnFakeOrphan(socketPath: socket)
+
+        let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
+        try pidFile.write(pid: orphanPID, socketPath: socket)
+
+        let supervisor = DaemonSupervisor(
+            binary: rclone,
+            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
+            runtimeDirectory: dir)
+        await supervisor.setOrphanCleanup {
+            .init(unmounted: [], stillMounted: ["/Users/x/grrclone/dav1"])
+        }
+
+        do {
+            _ = try await supervisor.start()
+            XCTFail("start() should refuse while an owned mount is still live")
+        } catch let error as DaemonSupervisor.Failure {
+            guard case .orphanMountsStillLive(let paths) = error else {
+                return XCTFail("expected orphanMountsStillLive, got \(error)")
+            }
+            XCTAssertEqual(paths, ["/Users/x/grrclone/dav1"])
+        }
+
+        XCTAssertEqual(kill(orphanPID, 0), 0,
+                       "the orphan must stay alive while it still has mounts to serve")
+    }
+
+    /// A cleanup that threw, or could not read the registry, reports everything as
+    /// possibly-still-mounted. That must block the kill too.
+    func testOrphanSurvivesWhenCleanupOutcomeIsUnknown() async throws {
+        let rclone = try requireRclone()
+        let socket = dir.appendingPathComponent("rc.sock").path
+        let orphanPID = try spawnFakeOrphan(socketPath: socket)
+
+        let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
+        try pidFile.write(pid: orphanPID, socketPath: socket)
+
+        let supervisor = DaemonSupervisor(
+            binary: rclone,
+            settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
+            runtimeDirectory: dir)
+        await supervisor.setOrphanCleanup { .init(stillMounted: ["<unknown>"]) }
+
+        _ = try? await supervisor.start()
+        XCTAssertEqual(kill(orphanPID, 0), 0,
+                       "an unknown cleanup result must not authorise the kill")
+    }
+
+    /// Splitting identify-then-kill so an unmount can run in between opened a PID
+    /// reuse window that did not exist before. `reap()` must revalidate.
+    func testReapRevalidatesBeforeSignalling() async throws {
+        let socket = dir.appendingPathComponent("rc.sock").path
+        let pid = try spawnFakeOrphan(socketPath: socket)
+        let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
+        try pidFile.write(pid: pid, socketPath: socket)
+
+        let found = await pidFile.reapableOrphan()
+        let record = try XCTUnwrap(found)
+
+        // Stand in for "the orphan exited during a slow unmount and something else
+        // inherited its PID": kill it ourselves, then hand the stale record back.
+        kill(pid, SIGKILL)
+        var waited = 0
+        while kill(pid, 0) == 0 && waited < 50 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            waited += 1
+        }
+
+        let reaped = await pidFile.reap(record)
+        XCTAssertNil(reaped, "a PID that is no longer our daemon must not be signalled")
     }
 
     // MARK: - Helpers

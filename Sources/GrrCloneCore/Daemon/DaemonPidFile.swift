@@ -67,12 +67,26 @@ public struct DaemonPidFile: Sendable {
         return record
     }
 
-    /// Terminate a daemon already confirmed by `reapableOrphan()`.
+    /// Terminate a daemon confirmed by `reapableOrphan()`, revalidating first.
     ///
-    /// Takes the record rather than re-reading, so the process killed is the one that
-    /// was identified and not whatever the PID refers to by the time we get here.
+    /// Returns the PID killed, or nil if it is no longer ours.
+    ///
+    /// **The recheck is the point.** Splitting identify-then-kill so an unmount can
+    /// happen in between opened a window that did not exist before: unmounting a
+    /// wedged volume can take a minute, and in that time the orphan can exit and its
+    /// PID be reused. Signalling the recorded PID on the strength of a check made
+    /// before the unmount would eventually kill an unrelated process — the same PID
+    /// reuse hazard `isOurDaemon` exists to close, reintroduced by the fix for it.
     @discardableResult
-    public func reap(_ record: Record) async -> Int32 {
+    public func reap(_ record: Record) async -> Int32? {
+        guard await Self.isOurDaemon(pid: record.pid, socketPath: record.socketPath) else {
+            // It exited on its own, or the PID is someone else's now. Either way there
+            // is nothing of ours to kill, and the record is spent.
+            clear()
+            try? FileManager.default.removeItem(atPath: record.socketPath)
+            return nil
+        }
+
         kill(record.pid, SIGTERM)
         for _ in 0..<20 {
             try? await Task.sleep(nanoseconds: 100_000_000)

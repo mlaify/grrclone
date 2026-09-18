@@ -14,6 +14,7 @@ public actor DaemonSupervisor {
         case binaryTooOld(found: String, minimum: String)
         case didNotStart(String)
         case notRunning
+        case orphanMountsStillLive([String])
 
         public var errorDescription: String? {
             switch self {
@@ -27,6 +28,13 @@ public actor DaemonSupervisor {
                 return "rclone did not start: \(detail)"
             case .notRunning:
                 return "The rclone daemon is not running."
+            case .orphanMountsStillLive(let paths):
+                return "A previous session left \(paths.count) volume(s) mounted that "
+                     + "could not be disconnected: \(paths.joined(separator: ", ")). "
+                     + "grrclone will not start the background process while those are "
+                     + "up, because doing so would leave macOS talking to a storage "
+                     + "server that no longer exists. Disconnect them in Finder, or run "
+                     + "`diskutil umount force <path>`, then try again."
             }
         }
     }
@@ -126,7 +134,20 @@ public actor DaemonSupervisor {
         // up. It runs only when an orphan is actually found, so the ordinary launch
         // pays nothing for it.
         if let orphan = await pidFile.reapableOrphan() {
-            orphanMountsUnmounted = await orphanCleanup?() ?? []
+            let outcome = await orphanCleanup?() ?? .nothingToDo
+            orphanMountsUnmounted = outcome.unmounted
+
+            // Reaping is conditional on the cleanup having actually succeeded.
+            //
+            // Returning only the list of paths we managed to unmount was the first
+            // version of this, and it was wrong in the same way the original bug was:
+            // a `diskutil` failure, an unreadable registry or an unreadable mount table
+            // all collapsed to an empty list, indistinguishable from "there was nothing
+            // to do" — and we killed the daemon anyway, straight back into the
+            // dead-server state this whole path exists to prevent.
+            guard outcome.stillMounted.isEmpty else {
+                throw Failure.orphanMountsStillLive(outcome.stillMounted)
+            }
             reapedOrphanPID = await pidFile.reap(orphan)
         }
 
@@ -255,12 +276,30 @@ public actor DaemonSupervisor {
     /// Empty on an ordinary launch, because the hook only runs when an orphan exists.
     private(set) public var orphanMountsUnmounted: [String] = []
 
+    /// What an attempt to bring down an orphan's mounts achieved.
+    ///
+    /// `stillMounted` is the field that matters and the reason this is not just a
+    /// list of successes: it must be possible to tell "nothing needed unmounting"
+    /// apart from "we tried and failed", because only the first makes it safe to kill
+    /// the daemon.
+    public struct OrphanCleanupOutcome: Sendable, Equatable {
+        public var unmounted: [String]
+        public var stillMounted: [String]
+
+        public init(unmounted: [String] = [], stillMounted: [String] = []) {
+            self.unmounted = unmounted
+            self.stillMounted = stillMounted
+        }
+
+        public static let nothingToDo = OrphanCleanupOutcome()
+    }
+
     /// Brings down the mounts an orphaned daemon is serving, before it is killed.
     ///
-    /// Returns the mountpoints it unmounted, for reporting. Set this on every
-    /// supervisor that might have mounts behind it; a supervisor without it will kill
-    /// an orphan out from under live mounts, which is what this exists to prevent.
-    public typealias OrphanCleanup = @Sendable () async -> [String]
+    /// Set this on every supervisor that might have mounts behind it; a supervisor
+    /// without it will kill an orphan out from under live mounts, which is what this
+    /// exists to prevent.
+    public typealias OrphanCleanup = @Sendable () async -> OrphanCleanupOutcome
     private var orphanCleanup: OrphanCleanup?
 
     public func setOrphanCleanup(_ cleanup: @escaping OrphanCleanup) {

@@ -18,6 +18,10 @@ thing was built the way it was, and what was tried and rejected — lives in
   no longer existed: for a few seconds after launch, anything touching those folders got
   an I/O error and writes in flight failed.
   ([#71](https://github.com/mlaify/grrclone/issues/71))
+- If a crashed session's volumes cannot be disconnected at startup, grrclone now
+  refuses to start and names them, rather than killing the background process anyway
+  and leaving those volumes connected to nothing.
+  ([#71](https://github.com/mlaify/grrclone/issues/71))
 - A failed start no longer leaves an rclone process running that nothing can find or
   stop, and that a retry would stack a second copy on top of.
   ([#72](https://github.com/mlaify/grrclone/issues/72))

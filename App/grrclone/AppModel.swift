@@ -622,6 +622,11 @@ final class AppModel: ObservableObject {
                 let root = await MainActor.run { self.mountRoot }
                 let mount = try await manager.connect(connection, mountRoot: root)
                 await MainActor.run {
+                    // A fresh mount is built from the saved connection, so whatever was
+                    // pending is now in force. Clearing this only in `remount()` left
+                    // Settings insisting the changes had not taken after an ordinary
+                    // disconnect-and-reconnect from the menu.
+                    self.needsRemount.remove(connection.id)
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Connected \(connection.displayName)"
                 }
@@ -670,11 +675,29 @@ final class AppModel: ObservableObject {
     /// active on a volume that is still accepting writes.
     @Published private(set) var needsRemount: Set<UUID> = []
 
+    /// Whether two versions of a connection differ in anything consumed at mount time.
+    ///
+    /// `connectAtLogin` is deliberately excluded: it is honoured at the *next* launch
+    /// and takes effect the moment it is saved, so flagging it would offer a
+    /// disruptive remount for a preference that is already in force.
+    static func needsRemountBetween(_ old: Connection, _ new: Connection) -> Bool {
+        old.displayName != new.displayName
+            || old.remote != new.remote
+            || old.path != new.path
+            || old.transport != new.transport
+            || old.options != new.options
+    }
+
     func update(_ connection: Connection) {
-        let wasMounted = rows.first { $0.id == connection.id }?.state.isMounted ?? false
+        let previous = rows.first { $0.id == connection.id }
+        let wasMounted = previous?.state.isMounted ?? false
+        let mountAffecting = previous.map {
+            Self.needsRemountBetween($0.connection, connection)
+        } ?? false
+
         Task {
             try? await store.upsert(connection)
-            if wasMounted { needsRemount.insert(connection.id) }
+            if wasMounted && mountAffecting { needsRemount.insert(connection.id) }
             await refresh()
         }
     }
@@ -692,6 +715,10 @@ final class AppModel: ObservableObject {
                 let root = await MainActor.run { self.mountRoot }
                 let mount = try await manager.connect(connection, mountRoot: root)
                 await MainActor.run {
+                    // This path calls the manager directly rather than going through
+                    // `connect(_:)`, so it clears the flag itself. Both places set it
+                    // on the same condition: a mount was just built from the saved
+                    // connection, so the saved connection is now what is in force.
                     self.needsRemount.remove(connection.id)
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Remounted \(connection.displayName)"
