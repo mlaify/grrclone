@@ -136,19 +136,64 @@ public struct NFSTransport: MountTransport {
 
     static let attemptTimeout: TimeInterval = 60
 
+    /// Unmount, and believe only the mount table about whether it worked.
+    ///
+    /// Exit status is not evidence here, in either direction — observed on a real
+    /// machine with three NFS mounts stacked on one path (#116):
+    ///
+    /// - `diskutil umount force` exits 0 having removed one layer, so the caller
+    ///   forgot the registry entry and ran `removeIfEmpty` on the layer underneath,
+    ///   which is still mounted and still ours.
+    /// - `umount -f` prints `Operation timed out` and exits non-zero whether or not
+    ///   it removed a layer. It had.
+    ///
+    /// So each command is followed by a second, independent read of the table, and
+    /// that read decides. Success is "nothing mounted there any more". A layer
+    /// removed with another still under it is reported as exactly that, and
+    /// thrown, so the caller keeps treating the path as mounted and owned — which it
+    /// is. One layer per call, deliberately: the registry records a path once, and
+    /// stripping every layer on the strength of that would also strip a volume
+    /// something else put there.
+    ///
+    /// An unreadable table is a failure, not a success: a caller that goes on to
+    /// forget the record and clean the directory needs to know the path is clear,
+    /// and "could not look" is not knowing.
     public func unmount(at mountPoint: URL) async throws {
+        let before = try await layers(at: mountPoint)
+        guard before > 0 else { return }   // Already clear. The goal state holds.
+
         // diskutil goes through DiskArbitration, which can dislodge a mount that plain
-        // umount cannot. Note `umount -l` is Linux-only and unavailable here.
-        let forced = try? await Shell.run(
+        // umount cannot — and refuses stacked NFS outright. `umount -l` is Linux-only.
+        _ = try? await Shell.run(
             "/usr/sbin/diskutil", ["umount", "force", mountPoint.path],
             timeout: Self.attemptTimeout)
-        if forced?.succeeded == true { return }
+        if try await layers(at: mountPoint) == 0 { return }
 
-        let fallback = try await Shell.run("/sbin/umount", ["-f", mountPoint.path],
-                                           timeout: Self.attemptTimeout)
-        guard fallback.succeeded else {
-            let detail = fallback.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw MountError.unmountFailed(detail.isEmpty ? "exit \(fallback.status)" : detail)
+        let fallback = try? await Shell.run("/sbin/umount", ["-f", mountPoint.path],
+                                            timeout: Self.attemptTimeout)
+        let after = try await layers(at: mountPoint)
+        if after == 0 { return }
+
+        if after < before {
+            throw MountError.unmountFailed(
+                "Removed one of \(before) volumes stacked at \(mountPoint.path); "
+                + "\(after) \(after == 1 ? "remains" : "remain"). Disconnect again, or "
+                + "run `umount -f \(mountPoint.path)` once per layer.")
+        }
+        let detail = (fallback?.stderr ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        throw MountError.unmountFailed(
+            detail.isEmpty ? "\(mountPoint.path) is still mounted" : detail)
+    }
+
+    /// How many volumes are mounted at `mountPoint`, or a throw if that cannot be
+    /// established.
+    private func layers(at mountPoint: URL) async throws -> Int {
+        do {
+            return try await mountTable().filter { $0.mountPoint == mountPoint.path }.count
+        } catch {
+            throw MountError.unmountFailed(
+                "grrclone could not read the mount table, so it cannot tell whether "
+                + "\(mountPoint.path) is still mounted.")
         }
     }
 

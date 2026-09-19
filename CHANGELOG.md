@@ -19,6 +19,15 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ### Fixed
 
+- Disconnecting now checks the list of mounted volumes afterwards rather than trusting
+  the unmount command's exit status, which lies in both directions on a path with
+  several volumes stacked on it. A layer removed with another still under it is
+  reported as exactly that, and the connection stays marked as connected and owned
+  until the path is really clear. ([#116](https://github.com/mlaify/grrclone/issues/116))
+- A volume that could not be disconnected during a repair after sleep or a network
+  change is no longer forgotten. It used to drop out of grrclone's own records while
+  still mounted, after which nothing would ever clean it up and the menu called it
+  "Not managed by grrclone". ([#111](https://github.com/mlaify/grrclone/issues/111))
 - grrclone no longer mounts on top of a volume that is already mounted at the same
   path. It refused only when it could see files there, so a dead mount whose listing
   failed, or an empty one, got a new volume stacked on it — once per retry — which is
