@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.6.0 is released**, and installable two ways:
+**v0.6.1 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-267 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+270 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -36,8 +36,28 @@ did not before, and which was proved rather than assumed.
 | v0.3.2 | **Released** 2026-09-18 |
 | v0.4.0 | **Released** 2026-09-18 |
 | v0.6.0 | **Released** 2026-09-19 |
+| v0.6.1 | **Released** 2026-09-19 |
 
 ## Releases
+
+### v0.6.1 — 2026-09-19
+
+One fix, found by chasing a flaky test rather than reported.
+
+`isOurDaemon` ran `/bin/ps` and collapsed every failure — including a timeout —
+into "not our daemon". Both callers treat that as a stale record: clear it, delete
+the socket, start a fresh daemon. So a `ps` that was merely slow would orphan a
+live daemon permanently, still serving mounts with nothing able to reach or stop
+it. Exactly the failure `DaemonPidFile` exists to prevent, caused by the check
+meant to prevent it — and the same `try?`-swallows-uncertainty shape as the 0.4.0
+audit cluster, in code written after that audit.
+
+Identification now has three states. "Unknown" keeps the record and makes startup
+refuse, naming the PID, because proceeding is what does the damage.
+
+Diagnosed from the timing: the failing test took 10.6 seconds, which is the 5s
+`ps` timeout plus the 5s wait in its own assertion. Two earlier guesses at the
+cause were disproved by testing before the arithmetic pointed at the real one.
 
 ### v0.6.0 — 2026-09-19
 
