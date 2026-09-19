@@ -58,6 +58,14 @@ thing was built the way it was, and what was tried and rejected — lives in
   stop a leftover background process while those volumes were still up. It now
   refuses to mount, to repair, or to stop anything until it can see the list.
   ([#115](https://github.com/mlaify/grrclone/issues/115))
+### Fixed
+
+- The log viewer no longer shows a remote's password in clear text at the Debug
+  level. rclone traces every control call there, including the one that creates or
+  edits a remote, and the trace carried the password under a key the redaction did
+  not know. Every `config/*` call's payload is now removed before it is stored, so
+  the tab's promise that passwords are removed automatically is true again.
+  ([#109](https://github.com/mlaify/grrclone/issues/109))
 
 ## [0.7.1] - 2026-09-19
 
