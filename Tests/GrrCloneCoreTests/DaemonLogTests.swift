@@ -189,11 +189,55 @@ final class DaemonLogBufferTests: XCTestCase {
     /// Replies carry the stored config back, obscured — one `rclone reveal` from
     /// plaintext — so they are payload too. The error at the end of a reply line is
     /// the one part worth keeping, and it is kept.
-    func testRedactsConfigRepliesButKeepsTheMethod() {
+    func testRedactsConfigRepliesButKeepsTheMethodAndTheError() {
         let dump = "DEBUG : rc: \"config/dump\": reply map[dav1:map[pass:AbCdEfObscured type:webdav url:https://dav.example]]: <nil>"
         let out = DaemonLog.redact(dump)
         XCTAssertFalse(out.contains("AbCdEfObscured"), out)
-        XCTAssertTrue(out.hasSuffix("rc: \"config/dump\": reply ***"), out)
+        XCTAssertTrue(out.hasSuffix("rc: \"config/dump\": reply ***: <nil>"), out)
+
+        // A failure's reason is the one part of a reply worth keeping. Codex
+        // pointed out the first version removed it along with the map.
+        let failed = "DEBUG : rc: \"config/create\": reply map[Error: Option:<nil>]: config name contains invalid characters"
+        let kept = DaemonLog.redact(failed)
+        XCTAssertTrue(kept.hasSuffix("reply ***: config name contains invalid characters"), kept)
+
+        // A reply that is not map-shaped is not trusted; it is redacted whole.
+        let odd = "DEBUG : rc: \"config/get\": reply something unexpected pass:x"
+        XCTAssertTrue(DaemonLog.redact(odd).hasSuffix("reply ***"), DaemonLog.redact(odd))
+    }
+
+    /// A trace longer than the flush limit arrives in fragments. Only the first
+    /// carries the `rc: "config/` prefix; the rest would have been stored as
+    /// ordinary text, which for a large `config/dump` reply is most of the secrets.
+    /// Codex found this on review of the first version.
+    func testAnOverLongSensitiveLineIsNotLeakedInFragments() async {
+        let log = DaemonLog()
+        let secret = "SERVICE-ACCOUNT-SECRET-\(UUID().uuidString)"
+        // Head fragment, well past the flush limit, then the tail with the secret,
+        // then the newline that ends the logical line, then an ordinary line.
+        let head = "DEBUG : rc: \"config/dump\": reply map[gdrive:map[service_account_credentials:"
+            + String(repeating: "A", count: DaemonLog.flushLimit + 100)
+        await log.append(Data(head.utf8))
+        await log.append(Data((String(repeating: "B", count: DaemonLog.flushLimit + 100)).utf8))
+        await log.append(Data("\(secret) type:drive]]: <nil>\nNOTICE : ordinary line after\n".utf8))
+
+        let stored = await log.recent.map(\.text).joined(separator: "\n")
+        XCTAssertFalse(stored.contains(secret), "a later fragment leaked: \(stored.suffix(200))")
+        XCTAssertFalse(stored.contains("BBBB"), "middle fragments must be dropped, not stored")
+        XCTAssertTrue(stored.contains("rc: \"config/dump\": reply ***"), "the head is kept, redacted")
+        XCTAssertTrue(stored.contains("ordinary line after"), "dropping must stop at the newline")
+    }
+
+    /// An over-long line that is *not* sensitive is still flushed in pieces, as
+    /// before: the fix must not turn every long line into nothing.
+    func testAnOverLongOrdinaryLineIsStillKept() async {
+        let log = DaemonLog()
+        let long = "INFO : listing " + String(repeating: "x", count: DaemonLog.flushLimit + 50)
+        await log.append(Data(long.utf8))
+        await log.append(Data(" tail\n".utf8))
+        let stored = await log.recent.map(\.text)
+        XCTAssertEqual(stored.count, 2)
+        XCTAssertTrue(stored[1].contains("tail"))
     }
 
     /// A non-config call whose parameters block carries a secret — `serve/start`
