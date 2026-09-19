@@ -42,9 +42,21 @@ met.
 
 Homebrew owns installs: `brew update && brew upgrade --cask grrclone`. If you would
 rather not remember that, [`brew autoupdate`](https://github.com/DomT4/homebrew-autoupdate)
-runs it for you on a schedule — `brew autoupdate start --upgrade` — and grrclone will
-simply stop telling you about versions you already have. It is not installed by
-default and grrclone does not assume it.
+can run it on a schedule. It is a third-party tap, not part of Homebrew, so it has to
+be installed first:
+
+```bash
+brew tap domt4/autoupdate
+brew autoupdate start --upgrade
+```
+
+**It upgrades everything Homebrew manages, not just grrclone** — that is the whole
+feature, and worth knowing before you turn it on. Without `--upgrade` it only
+refreshes metadata, which still means `brew upgrade --cask grrclone` finds a new
+version immediately instead of up to 24 hours later.
+
+grrclone neither requires nor assumes any of this; it will simply stop mentioning
+versions you already have.
 
 grrclone can be asked to
 *check* for new releases, but it never replaces its own bundle — two updaters owning
