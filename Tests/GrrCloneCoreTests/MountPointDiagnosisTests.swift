@@ -20,7 +20,9 @@ final class MountPointDiagnosisTests: XCTestCase {
     func testAStackedMountIsReportedAsAMountNotAsFiles() {
         let why = NFSTransport.whyUnusable(path: "/Users/x/Cloud", itemCount: 582, existingMounts: 3)
         XCTAssertTrue(why.contains("3 volumes are stacked"), why)
-        XCTAssertTrue(why.contains("diskutil umount force /Users/x/Cloud"), why)
+        XCTAssertTrue(why.contains("umount -f /Users/x/Cloud"), why)
+        XCTAssertFalse(why.contains("diskutil"),
+                       "diskutil refuses stacked NFS; the app must not recommend it")
         XCTAssertFalse(why.contains("582"),
                        "the file count is misleading here and must not be shown")
     }

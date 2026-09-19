@@ -107,9 +107,10 @@ server on the dead port so the UNMOUNT RPC gets a reply — but it is fiddly eno
 a reboot is the honest recommendation.
 
 grrclone will not remove these for you, because they are not in its registry and it
-cannot prove they are not yours. Since 0.7.1 the menu says how many layers are stacked
-and names the command, instead of counting the top layer's files and calling them
-"existing items". Offering a confirmed one-click cleanup for mounts that carry
+cannot prove they are not yours. Since 0.7.1 the menu lists a stacked path once with a
+`×N` count and the `umount -f` command beside it, and the mount error explains that
+what you can see there is another volume — instead of counting the top layer's files
+and calling them "existing items". Offering a confirmed one-click cleanup for mounts that carry
 grrclone's own fingerprint is tracked as
 [#105](https://github.com/mlaify/grrclone/issues/105).
 

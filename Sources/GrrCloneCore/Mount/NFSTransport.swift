@@ -179,11 +179,15 @@ public struct NFSTransport: MountTransport {
         let what = existingMounts == 1
             ? "Something is already mounted at \(path)"
             : "\(existingMounts) volumes are stacked at \(path)"
+        // `umount -f`, not `diskutil umount force`. DiskArbitration refuses stacked
+        // NFS outright — observed, not supposed — while `umount -f` is what this
+        // transport itself falls back to. Recommending the one that fails would
+        // send the user to the wrong tool.
         return "\(what), and grrclone did not mount \(existingMounts == 1 ? "it" : "them"). "
              + "What you can see there belongs to that volume, not to your disk. "
              + "Disconnect \(existingMounts == 1 ? "it" : "them") first — "
-             + "`diskutil umount force \(path)`"
-             + (existingMounts > 1 ? ", once per mount." : ".")
+             + "`umount -f \(path)`"
+             + (existingMounts > 1 ? ", once per layer." : ".")
     }
 
     /// Make a mountpoint unwritable while nothing is mounted on it.

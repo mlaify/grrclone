@@ -11,6 +11,14 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- The menu now shows the `umount -f` command next to a path that is mounted several
+  times over, where it stays visible. It had been placed at the end of the error
+  message, which is cut off at three lines — so the one line that said what to do was
+  the one nobody could see. The message also now recommends `umount -f` rather than
+  `diskutil`, which refuses stacked mounts.
+
 ### Documented
 
 - What to do about a mount that is stacked on top of a dead one, and why `umount -f`
