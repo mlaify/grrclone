@@ -546,11 +546,11 @@ private struct UpdatesTab: View {
     private var installedByNote: String {
         guard isHomebrew else { return "" }
         return "Homebrew manages this copy — update it with "
-            + "`brew upgrade --cask grrclone`."
+            + "`brew update && brew upgrade --cask grrclone`."
     }
 
     private var howToInstallNote: String {
-        isHomebrew ? "Run `brew upgrade --cask grrclone` to install it."
+        isHomebrew ? "Run `brew update && brew upgrade --cask grrclone` to install it."
                    : "Download it from the releases page."
     }
 

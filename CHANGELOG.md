@@ -18,6 +18,10 @@ thing was built the way it was, and what was tried and rejected — lives in
   bar app can run for weeks, so the old behaviour meant anyone who started it before a
   release never heard about it. An available update marks the menu bar icon, and a
   **Copy Command** button puts the upgrade command on your clipboard.
+- The upgrade command grrclone shows and copies now refreshes Homebrew first
+  (`brew update && brew upgrade --cask grrclone`). `brew upgrade` only refreshes on
+  its own once every 24 hours, so anyone who had used brew earlier the same day
+  would have been told they were up to date while grrclone said otherwise.
 - **One permission, asked once.** Turning on update checks asks macOS whether
   grrclone may notify you. It is the only permission grrclone requests, it is asked
   when you opt in rather than at first launch, and declining costs nothing else — the

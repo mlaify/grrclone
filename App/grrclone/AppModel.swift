@@ -788,10 +788,16 @@ final class AppModel: ObservableObject {
 
     /// The exact command to upgrade, for the Copy button.
     ///
-    /// Only `brew upgrade` — not `brew update` first. Homebrew auto-updates before
-    /// an upgrade unless `HOMEBREW_NO_AUTO_UPDATE` is set, so a second command
-    /// would be cargo cult, and every extra step is one more place to give up.
-    var upgradeCommand: String { "brew upgrade --cask grrclone" }
+    /// `brew update` first, then upgrade.
+    ///
+    /// An earlier version omitted the update on the grounds that `brew upgrade`
+    /// refreshes metadata by itself. It does — but only once per
+    /// `HOMEBREW_AUTO_UPDATE_SECS`, which defaults to 24 hours. Since grrclone
+    /// checks daily, the common case is someone who used brew earlier that day:
+    /// they paste the command, brew reports everything up to date against a stale
+    /// tap, and the app looks wrong. Copying two commands costs exactly as much as
+    /// copying one.
+    var upgradeCommand: String { "brew update && brew upgrade --cask grrclone" }
 
     func copyUpgradeCommand() {
         NSPasteboard.general.clearContents()
