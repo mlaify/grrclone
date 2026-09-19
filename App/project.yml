@@ -44,8 +44,9 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         SWIFT_VERSION: "5.10"
         COMBINE_HIDPI_IMAGES: YES
-        # Universal, so Intel Macs are supported. rclone must be lipo'd to match.
-        ARCHS: "$(ARCHS_STANDARD)"
+        # Apple Silicon only, by decision: build-app.sh asserts it and fetch-rclone.sh
+        # bundles an arm64 rclone to match. Set here too so a plain xcodebuild agrees.
+        ARCHS: arm64
         # The app spawns a bundled rclone and shells /sbin/mount, neither of which the
         # App Sandbox permits. Distribution is Developer ID, where sandboxing is optional.
         ENABLE_APP_SANDBOX: NO

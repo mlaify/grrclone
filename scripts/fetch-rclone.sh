@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 #
-# Fetch a pinned rclone and build a universal binary for bundling into grrclone.app.
+# Fetch a pinned rclone for bundling into grrclone.app.
+#
+# arm64 only. grrclone is Apple Silicon only by decision (scripts/build-app.sh asserts
+# the app is arm64), so a second slice would ship code nothing can run, double the
+# download and the notarisation surface, and let the bundled binary disagree with the
+# app about which Macs it supports. Earlier versions lipo'd a universal rclone here.
 #
 #   scripts/fetch-rclone.sh
 #
@@ -9,9 +14,9 @@
 # is enforced by scripts/check-privacy.sh and is the reason the version is pinned here
 # rather than resolved from "latest".
 #
-# To update: change RCLONE_VERSION, put the new digests from
-# https://github.com/rclone/rclone/releases/download/<version>/SHA256SUMS into the two
-# variables below, and re-run. Never take the digests from the same download you are
+# To update: change RCLONE_VERSION, put the new digest for the osx-arm64 zip from
+# https://github.com/rclone/rclone/releases/download/<version>/SHA256SUMS into the
+# variable below, and re-run. Never take the digests from the same download you are
 # verifying; that verifies nothing.
 #
 set -euo pipefail
@@ -19,7 +24,6 @@ cd "$(dirname "$0")/.."
 
 RCLONE_VERSION="v1.75.1"
 SHA256_ARM64="c61d7a371c62bcbbe882c3423aa4b8bf63485c248dd0f692997b8f0c3f6d0c6f"
-SHA256_AMD64="29253d0288b8fbbac46baad6e5f6add6cb01d462c79f10805bbd4631c4cdf82c"
 
 # Below this, rclone has NFS defects that matter: missing EOF flags in READ responses,
 # no --vfs-handle-caching, file creation failing for want of Mknod, ESTALE from
@@ -61,17 +65,21 @@ fetch() { # arch expected-sha256
 
 echo "Fetching rclone ${RCLONE_VERSION}"
 fetch arm64 "$SHA256_ARM64"
-fetch amd64 "$SHA256_AMD64"
 
-echo "Creating a universal binary…"
 mkdir -p "$(dirname "$DEST")"
-# lipo first, sign later, and sign the fat result exactly once. Signing each slice and
-# then combining them produces a binary that verifies locally but fails notarisation.
-lipo -create -output "$DEST" "$WORK/rclone-arm64" "$WORK/rclone-amd64"
+mv "$WORK/rclone-arm64" "$DEST"
 chmod +x "$DEST"
 
+# Assert the architecture rather than trusting the download's name, the same way
+# build-app.sh asserts the app's. This is the binary that serves every mount.
+SLICES=$(lipo -archs "$DEST")
+if [[ "$SLICES" != "arm64" ]]; then
+    echo "expected an arm64-only rclone, got: $SLICES" >&2
+    exit 1
+fi
+
 echo
-lipo -info "$DEST" | sed 's/^/  /'
+echo "  arch: $SLICES"
 "$DEST" version | head -1 | sed 's/^/  /'
 echo "  $(du -h "$DEST" | awk '{print $1}')"
 

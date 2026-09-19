@@ -11,6 +11,12 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled rclone is now Apple Silicon only, like the app that ships it. The
+  previous universal binary carried an Intel slice nothing could run, and the download
+  is smaller for it. ([#122](https://github.com/mlaify/grrclone/issues/122))
+
 ## [0.7.1] - 2026-09-19
 
 ### Fixed
