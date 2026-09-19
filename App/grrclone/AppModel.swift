@@ -69,6 +69,10 @@ final class AppModel: ObservableObject {
     }
     @Published var lastError: String?
     @Published private(set) var activity = ConnectionManager.Activity()
+
+    /// What the daemon is moving right now. Nil means it could not be asked — which
+    /// a progress view must show differently from "nothing is transferring".
+    @Published private(set) var transferStats: RcloneRCClient.Stats?
     /// True when the user's rclone config is encrypted, which enables the
     /// configuration section in Settings.
     @Published private(set) var configIsEncrypted = false
@@ -947,14 +951,69 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self, let manager = await self.currentManager else { return }
                 let snapshot = await manager.activity()
+                let transfers = await manager.transferStats()
                 if Task.isCancelled { return }
-                await MainActor.run { self.activity = snapshot }
+                await MainActor.run {
+                    self.activity = snapshot
+                    self.transferStats = transfers
+                }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
     }
 
     private var currentManager: ConnectionManager? { manager }
+
+    /// At most three transfers, so a large sync does not turn the menu into a log.
+    static let visibleTransferLimit = 3
+
+    var visibleTransfers: [RcloneRCClient.Transfer] {
+        Array((transferStats?.transferring ?? []).prefix(Self.visibleTransferLimit))
+    }
+
+    var hiddenTransferCount: Int? {
+        let total = transferStats?.transferring.count ?? 0
+        let hidden = total - Self.visibleTransferLimit
+        return hidden > 0 ? hidden : nil
+    }
+
+    /// Aggregate throughput, or nil when nothing is moving.
+    ///
+    /// Nil rather than "0 B/s": a zero reads as "stalled", and rclone reports zero
+    /// for the moment between finishing one file and starting the next.
+    var transferSpeed: String? {
+        guard let speed = transferStats?.speed, speed > 0 else { return nil }
+        return ByteCountFormatter.string(fromByteCount: Int64(speed), countStyle: .file) + "/s"
+    }
+
+    /// One file's progress, as much of it as rclone actually knows.
+    ///
+    /// Each part is omitted when unknown rather than shown as zero. An ETA of "0s"
+    /// on a transfer that has barely started is worse than no ETA, and rclone
+    /// genuinely reports null until it has a sample to estimate from.
+    static func describe(transfer: RcloneRCClient.Transfer) -> String {
+        var parts: [String] = []
+        if transfer.size > 0 {
+            let done = ByteCountFormatter.string(fromByteCount: Int64(transfer.bytes),
+                                                 countStyle: .file)
+            let total = ByteCountFormatter.string(fromByteCount: Int64(transfer.size),
+                                                  countStyle: .file)
+            parts.append("\(done) of \(total)")
+        }
+        if let eta = transfer.eta, eta > 0 {
+            parts.append("\(formatSeconds(eta)) left")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Compact and rounded. A progress line is glanced at, not read.
+    static func formatSeconds(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        return minutes == 0 ? "\(hours)h" : "\(hours)h \(minutes)m"
+    }
 
     /// Last polled count, for display only. Up to two seconds stale, so it must never
     /// be the basis of a safety decision — use `currentActivity()` for that.
