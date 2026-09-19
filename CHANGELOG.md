@@ -11,6 +11,13 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- grrclone no longer starts a second background process when it cannot tell whether
+  one from a previous session is still running. It used to treat "could not check"
+  as "nothing there", which could leave the old process running and unreachable,
+  still serving your volumes with nothing able to stop it.
+
 ## [0.6.0] - 2026-09-19
 
 ### Added

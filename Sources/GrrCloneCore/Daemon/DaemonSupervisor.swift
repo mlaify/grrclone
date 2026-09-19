@@ -15,6 +15,7 @@ public actor DaemonSupervisor {
         case didNotStart(String)
         case notRunning
         case orphanMountsStillLive([String])
+        case orphanUndetermined(pid: Int32)
 
         public var errorDescription: String? {
             switch self {
@@ -28,6 +29,11 @@ public actor DaemonSupervisor {
                 return "rclone did not start: \(detail)"
             case .notRunning:
                 return "The rclone daemon is not running."
+            case .orphanUndetermined(let pid):
+                return "grrclone recorded a background process (\(pid)) from a previous "
+                     + "session and cannot tell whether it is still running, so it will "
+                     + "not start a second one. Check with `ps -p \(pid)`: if it is gone, "
+                     + "try again; if it is still there, quit it and try again."
             case .orphanMountsStillLive(let paths):
                 return "A previous session left \(paths.count) volume(s) mounted that "
                      + "could not be disconnected: \(paths.joined(separator: ", ")). "
@@ -133,7 +139,15 @@ public actor DaemonSupervisor {
         // The cleanup is injected because the registry of owned mounts belongs a layer
         // up. It runs only when an orphan is actually found, so the ordinary launch
         // pays nothing for it.
-        if let orphan = await pidFile.reapableOrphan() {
+        let reapable = await pidFile.reapableOrphan()
+        if case .undetermined(let record) = reapable {
+            // Refuse rather than guess. We recorded a daemon, cannot establish
+            // whether it is still running, and starting anyway would delete the
+            // socket it may be listening on — orphaning it permanently, still
+            // serving mounts with nothing able to reach or stop it.
+            throw Failure.orphanUndetermined(pid: record.pid)
+        }
+        if case .orphan(let orphan) = reapable {
             let outcome = await orphanCleanup?() ?? .nothingToDo
             orphanMountsUnmounted = outcome.unmounted
 
