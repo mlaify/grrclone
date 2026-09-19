@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-19
+
 ### Fixed
 
 - The menu now shows the `umount -f` command next to a path that is mounted several
@@ -23,9 +25,6 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 - What to do about a mount that is stacked on top of a dead one, and why `umount -f`
   saying "Operation timed out" does not mean it did nothing.
-
-### Fixed
-
 - A freshly upgraded copy no longer quits itself when launched while the previous
   copy is still disconnecting. It used to refuse on sight, and a quit can take minutes
   when uploads are draining — so "the new version is broken" was really "it gave up
@@ -206,7 +205,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/mlaify/grrclone/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mlaify/grrclone/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/mlaify/grrclone/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/mlaify/grrclone/compare/v0.4.0...v0.6.0
