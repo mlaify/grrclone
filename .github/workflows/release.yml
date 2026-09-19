@@ -58,6 +58,32 @@ jobs:
         with:
           ref: ${{ env.TAG }}
 
+      # The attestation's source commit comes from the *event*, not from what we
+      # checked out, and nothing keeps the two in step.
+      #
+      # On a tag push they always agree. On `workflow_dispatch` they need not:
+      # checkout honours the tag typed into the input, while GITHUB_SHA stays on
+      # whichever ref the run was launched from. Rebuilding v0.1.0 from a dispatch
+      # started on main would therefore publish v0.1.0's DMG carrying provenance
+      # that names main's HEAD — an attestation that is cryptographically valid and
+      # factually wrong, which is worse than none at all.
+      #
+      # Rather than try to override the action's notion of the source, refuse the
+      # mismatch. Dispatching still works; it has to be launched *from the tag*,
+      # which GitHub's UI offers in the same dropdown as a branch.
+      - name: Refuse to attest a commit we did not build
+        env:
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BUILT_SHA="$(git rev-parse HEAD)"
+          if [ "$BUILT_SHA" != "$EVENT_SHA" ]; then
+            echo "::error::checked out $TAG ($BUILT_SHA) but this run's context is" \
+                 "$EVENT_SHA, so the provenance attestation would name the wrong" \
+                 "commit. Re-run the workflow with $TAG selected as the ref."
+            exit 1
+          fi
+
       # A tag is just a label; nothing else ties it to what the app reports as its
       # version. Without this, tagging v0.2.0 publishes a release whose About box,
       # Finder Get Info and crash reports all still say 0.1.0 — and the only thing

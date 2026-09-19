@@ -22,6 +22,13 @@ A pre-release suffix belongs to the tag alone: `v0.2.0-rc1` and `v0.2.0` both ex
 workflow refuses anything else rather than interpolating a free-text field into a git
 ref or a shell command.
 
+**Launch a dispatch from the tag, not from a branch.** GitHub offers tags in the same
+"Use workflow from" dropdown as branches. The build honours the tag you type into the
+input, but the provenance attestation takes its source commit from the *event* — so a
+rebuild of v0.1.0 started from `main` would publish v0.1.0's DMG carrying provenance
+naming `main`'s HEAD. That attestation would be cryptographically valid and factually
+wrong, which is worse than none, so the workflow refuses when the two disagree.
+
 ## One-time setup
 
 The workflow needs six secrets in a repository **environment named `release`**, not in
