@@ -201,6 +201,7 @@ struct MenuBarView: View {
     private var hasActivityToReport: Bool {
         model.pendingUploads > 0 || model.activity.erroredFiles > 0
             || model.activity.outOfSpace || model.activity.hasUnknownState
+            || model.transferStats?.isActive == true
     }
 
     /// Pending uploads are shown prominently because a write returns as soon as it hits
@@ -215,10 +216,47 @@ struct MenuBarView: View {
                          ? "1 file still uploading"
                          : "\(model.pendingUploads) files still uploading")
                         .font(.caption)
+                    Spacer()
+                    if let speed = model.transferSpeed {
+                        Text(speed).font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Text("Saved on this Mac, not yet on the server.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+
+            // The files themselves, not just a count.
+            //
+            // A count answers "is anything happening"; it does not answer "is the
+            // big one nearly done" or "why has this been going for ten minutes",
+            // which is what someone watching an upload actually wants. Capped at
+            // three so a large sync does not turn the menu into a log.
+            ForEach(model.visibleTransfers) { transfer in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(transfer.name)
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text(AppModel.describe(transfer: transfer))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    // Indeterminate when rclone has not reported a size, rather than
+                    // a bar sitting at 0% that looks stuck.
+                    if let fraction = transfer.fraction {
+                        ProgressView(value: fraction).controlSize(.small)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            if let more = model.hiddenTransferCount {
+                Text("and \(more) more")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             if model.activity.hasUnknownState {
                 Label("Cannot reach rclone — upload state unknown",

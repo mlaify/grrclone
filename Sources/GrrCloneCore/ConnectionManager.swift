@@ -639,6 +639,16 @@ public actor ConnectionManager {
         public var hasUnknownState: Bool { !unreachable.isEmpty }
     }
 
+    /// Aggregate transfer state from the daemon.
+    ///
+    /// Returns nil when the daemon cannot be reached, rather than an empty `Stats`.
+    /// Zero transfers and "we could not ask" look identical in a progress view, and
+    /// the difference is exactly what a user watching an upload needs to know.
+    public func transferStats() async -> RcloneRCClient.Stats? {
+        guard let client = try? await supervisor.requireClient() else { return nil }
+        return try? await client.stats()
+    }
+
     /// Local cache state for every active connection.
     ///
     /// A connection that cannot be queried is recorded in `unreachable` rather than

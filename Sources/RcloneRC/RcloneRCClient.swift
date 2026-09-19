@@ -117,20 +117,92 @@ public actor RcloneRCClient {
 
     // MARK: - Stats
 
-    public struct Stats: Sendable {
+    /// One file rclone is moving right now.
+    ///
+    /// Field names captured from a live `core/stats` during a real transfer, not
+    /// taken from documentation: `name`, `size`, `bytes`, `speed`, `speedAvg`,
+    /// `percentage`, `eta`, `group`, `srcFs`, `dstFs`. `eta` is null until rclone has
+    /// enough of a sample to estimate, so it is optional here rather than defaulted
+    /// to zero — "unknown" and "no time left" are very different things to show.
+    public struct Transfer: Sendable, Equatable, Identifiable {
+        public let name: String
+        public let size: Int
         public let bytes: Int
-        public let errors: Int
-        public let transferring: Int
         public let speed: Double
+        public let eta: Int?
+
+        public var id: String { name }
+
+        /// Nil when rclone has not reported a size, rather than a misleading 0%.
+        public var fraction: Double? {
+            guard size > 0 else { return nil }
+            return min(1, Double(bytes) / Double(size))
+        }
+
+        public init(name: String, size: Int, bytes: Int, speed: Double, eta: Int?) {
+            self.name = name
+            self.size = size
+            self.bytes = bytes
+            self.speed = speed
+            self.eta = eta
+        }
     }
 
+    public struct Stats: Sendable, Equatable {
+        public let bytes: Int
+        public let totalBytes: Int
+        public let errors: Int
+        public let speed: Double
+        public let eta: Int?
+        /// Files in flight. Empty when nothing is moving — rclone omits the key
+        /// entirely at rest.
+        public let transferring: [Transfer]
+
+        public var isActive: Bool { !transferring.isEmpty }
+
+        public init(bytes: Int = 0, totalBytes: Int = 0, errors: Int = 0,
+                    speed: Double = 0, eta: Int? = nil, transferring: [Transfer] = []) {
+            self.bytes = bytes
+            self.totalBytes = totalBytes
+            self.errors = errors
+            self.speed = speed
+            self.eta = eta
+            self.transferring = transferring
+        }
+    }
+
+    /// Aggregate transfer state, and the per-file detail behind it.
+    ///
+    /// Deliberately **not** `short: true`. That flag omits the `transferring` array
+    /// altogether — verified against a live daemon — so the previous version of this
+    /// function counted `transferring` and could only ever report zero. It had no
+    /// callers, which is the only reason that never showed up as a bug.
     public func stats() async throws -> Stats {
-        let result = try await call("core/stats", ["short": .bool(true)])
+        Self.parseStats(try await call("core/stats"))
+    }
+
+    /// Split out so tests exercise the function the client actually uses.
+    ///
+    /// Re-implementing this parse inside a test would prove only that the test
+    /// agrees with itself: `stats()` could go back to `short: true` — dropping the
+    /// `transferring` array entirely — and every assertion would still pass.
+    static func parseStats(_ result: JSONValue) -> Stats {
+        let transfers = (result["transferring"]?.arrayValue ?? []).compactMap {
+            entry -> Transfer? in
+            guard let name = entry["name"]?.stringValue else { return nil }
+            return Transfer(name: name,
+                            size: entry["size"]?.intValue ?? 0,
+                            bytes: entry["bytes"]?.intValue ?? 0,
+                            speed: entry["speed"]?.doubleValue ?? 0,
+                            eta: entry["eta"]?.intValue)
+        }
         return Stats(
             bytes: result["bytes"]?.intValue ?? 0,
+            totalBytes: result["totalBytes"]?.intValue ?? 0,
             errors: result["errors"]?.intValue ?? 0,
-            transferring: result["transferring"]?.arrayValue?.count ?? 0,
-            speed: result["speed"]?.doubleValue ?? 0
+            speed: result["speed"]?.doubleValue ?? 0,
+            eta: result["eta"]?.intValue,
+            transferring: transfers
         )
     }
 
