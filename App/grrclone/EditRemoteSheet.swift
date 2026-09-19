@@ -20,6 +20,13 @@ struct EditRemoteSheet: View {
     @State private var values: [String: String] = [:]
     /// What was loaded, to work out what actually changed.
     @State private var original: [String: String] = [:]
+    /// Option names that are passwords or otherwise sensitive.
+    ///
+    /// Kept separate from `editedSecrets`, which is the ones the user has typed
+    /// into. Conflating the two wiped passwords: an untouched secret is blank in
+    /// `values` and obscured in `original`, so a plain "did it change?" comparison
+    /// said yes and sent an empty string.
+    @State private var secretFields: Set<String> = []
     /// Secret fields the user has typed into. Only these are sent.
     @State private var editedSecrets: Set<String> = []
     @State private var showAdvanced = false
@@ -128,25 +135,12 @@ struct EditRemoteSheet: View {
         }
     }
 
-    /// Only what the user actually altered.
-    ///
-    /// Sending the whole form back would rewrite every value, including obscured
-    /// secrets that would then go through rclone's guess-whether-to-obscure
-    /// heuristic for no reason. A change set of exactly what was edited avoids the
-    /// question entirely.
+    /// Only what the user actually altered. See `RemoteEdit.changeSet`, which lives
+    /// in the core package so it can be tested — the app target has no test bundle,
+    /// and the first version of this wiped passwords.
     private var changes: [String: String] {
-        var result: [String: String] = [:]
-        for (key, value) in values {
-            let isSecret = editedSecrets.contains(key)
-            if isSecret {
-                // An emptied secret field means "leave it alone", not "set it to
-                // empty" — that is what the placeholder promises.
-                if !value.isEmpty { result[key] = value }
-            } else if value != (original[key] ?? "") {
-                result[key] = value
-            }
-        }
-        return result
+        RemoteEdit.changeSet(values: values, original: original,
+                             secretFields: secretFields, editedSecrets: editedSecrets)
     }
 
     private var hasChanges: Bool { !changes.isEmpty }
@@ -162,7 +156,17 @@ struct EditRemoteSheet: View {
             let found = try await model.availableProviders().first { $0.name == type }
             if let found {
                 for option in found.options where option.isPassword || option.sensitive {
+                    secretFields.insert(option.name)
                     shown[option.name] = ""
+                }
+                // An option absent from rclone.conf is running at the provider's
+                // default, not at empty. Showing a default-on boolean as unchecked
+                // tells the user the opposite of what is in force, and a toggle
+                // there and back would then write the wrong value explicitly.
+                for option in found.options where shown[option.name] == nil {
+                    guard !option.defaultValue.isEmpty else { continue }
+                    shown[option.name] = option.defaultValue
+                    original[option.name] = option.defaultValue
                 }
             }
             values = shown

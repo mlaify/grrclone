@@ -190,4 +190,77 @@ final class RemoteEditingTests: XCTestCase {
 
         XCTAssertEqual(try storedValue("type"), "webdav")
     }
+    // MARK: - Building the change set
+
+    /// The bug this function was extracted over: an untouched password field is
+    /// blank on screen and obscured in the stored config, so a naive "did it
+    /// change?" comparison says yes and sends an empty string — overwriting the
+    /// stored password with nothing.
+    func testAnUntouchedSecretIsNeverSent() {
+        let changes = RemoteEdit.changeSet(
+            values: ["user": "alice", "pass": ""],
+            original: ["user": "alice", "pass": "WwxOtfBpqZlo3cZAFE0j8xswx67fUa1itAHhdw"],
+            secretFields: ["pass"],
+            editedSecrets: [])
+
+        XCTAssertTrue(changes.isEmpty,
+                      "a form nobody edited must send nothing, got \(changes)")
+        XCTAssertNil(changes["pass"], "an untouched password must never be sent")
+    }
+
+    /// Clearing the field is not a request to blank the password — the placeholder
+    /// says "unchanged", and an empty write would destroy it.
+    func testAnEmptiedSecretIsTreatedAsUnchanged() {
+        let changes = RemoteEdit.changeSet(
+            values: ["pass": ""],
+            original: ["pass": "obscured-value"],
+            secretFields: ["pass"],
+            editedSecrets: ["pass"])
+
+        XCTAssertNil(changes["pass"])
+    }
+
+    func testANewSecretIsSent() {
+        let changes = RemoteEdit.changeSet(
+            values: ["pass": "brand-new"],
+            original: ["pass": "obscured-value"],
+            secretFields: ["pass"],
+            editedSecrets: ["pass"])
+
+        XCTAssertEqual(changes, ["pass": "brand-new"])
+    }
+
+    func testOnlyChangedOrdinaryFieldsAreSent() {
+        let changes = RemoteEdit.changeSet(
+            values: ["url": "https://new.invalid", "user": "alice", "type": "webdav"],
+            original: ["url": "https://old.invalid", "user": "alice", "type": "webdav"],
+            secretFields: [],
+            editedSecrets: [])
+
+        XCTAssertEqual(changes, ["url": "https://new.invalid"],
+                       "an unchanged field must not be rewritten")
+    }
+
+    /// A field absent from the stored config but filled in on the form is new, and
+    /// must be sent.
+    func testAValueAddedWhereThereWasNoneIsSent() {
+        let changes = RemoteEdit.changeSet(
+            values: ["bearer_token": "abc"],
+            original: [:],
+            secretFields: [],
+            editedSecrets: [])
+
+        XCTAssertEqual(changes, ["bearer_token": "abc"])
+    }
+
+    /// Editing one field must not drag a secret along with it.
+    func testChangingAnOrdinaryFieldLeavesSecretsAlone() {
+        let changes = RemoteEdit.changeSet(
+            values: ["url": "https://new.invalid", "pass": ""],
+            original: ["url": "https://old.invalid", "pass": "obscured-value"],
+            secretFields: ["pass"],
+            editedSecrets: [])
+
+        XCTAssertEqual(changes, ["url": "https://new.invalid"])
+    }
 }
