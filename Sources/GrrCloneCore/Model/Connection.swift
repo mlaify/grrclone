@@ -50,6 +50,20 @@ public struct Connection: Codable, Sendable, Identifiable, Equatable {
         return cleaned
     }
 
+    /// The identity of a folder name as the filesystem sees it.
+    ///
+    /// macOS volumes are case-insensitive by default and normalise Unicode, so
+    /// `Cloud` and `cloud`, or `Café` composed and decomposed, are one directory.
+    /// A collision check that compares strings exactly lets two connections resolve
+    /// to one folder; this is the key every such check compares instead. It errs
+    /// towards refusing: on a case-sensitive volume two names differing only in
+    /// case would be distinct folders, and grrclone still treats them as one,
+    /// because the cost of that is a renamed connection and the cost of the other
+    /// mistake is a stacked mount (#112, Codex review).
+    public static func folderKey(_ name: String) -> String {
+        name.decomposedStringWithCanonicalMapping.lowercased()
+    }
+
     /// Keep a subpath usable as the right-hand side of `remote:path`.
     ///
     /// rclone takes everything after the colon literally:

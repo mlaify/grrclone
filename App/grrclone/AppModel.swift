@@ -196,18 +196,7 @@ final class AppModel: ObservableObject {
                 return
             }
 
-            // Said before anything is adopted, so the person knows why every
-            // connection is suddenly back at its defaults — and where the file with
-            // their settings went. Adoption still runs: an empty menu is not a
-            // better outcome than a working one with a warning on it, and the
-            // quarantined file makes the settings recoverable by hand.
-            if let failure = await store.loadFailure {
-                lastError = "grrclone could not read its list of connections "
-                          + "(\(failure.reason)). The file was moved to "
-                          + "\(failure.quarantinedAt.path) and your remotes have been "
-                          + "set up again with default settings."
-            }
-
+            await reportStoreLoadFailure()
             let remotes = try await client.listRemotes()
             _ = try? await store.adoptNewRemotes(remotes)
 
@@ -309,7 +298,36 @@ final class AppModel: ObservableObject {
     /// Idempotent: the watchers must not be started twice if this runs again.
     private var startupCompleted = false
 
+    /// Say why every connection is suddenly back at its defaults, and where the
+    /// file with the settings went.
+    ///
+    /// Called from both paths that adopt remotes — `start()` and, after a deferred
+    /// unlock, `finishStartup()` — because the first version said it only in
+    /// `start()`, which returns early when the password prompt is cancelled. The
+    /// unlock path then adopted and persisted without a word, and by the next
+    /// launch the original file had long been moved, so the warning was lost for
+    /// good. Codex found that on review.
+    ///
+    /// Adoption still runs when the file was moved aside: an empty menu is not a
+    /// better outcome than a working one with a warning on it, and the quarantined
+    /// file makes the settings recoverable by hand. When it could *not* be moved,
+    /// the store refuses every write, and adoption fails quietly into that refusal.
+    private func reportStoreLoadFailure() async {
+        guard let failure = await store.loadFailure else { return }
+        if let aside = failure.quarantinedAt {
+            lastError = "grrclone could not read its list of connections "
+                      + "(\(failure.reason)). The file was moved to \(aside.path) and "
+                      + "your remotes have been set up again with default settings."
+        } else {
+            lastError = "grrclone could not read its list of connections "
+                      + "(\(failure.reason)) and could not move the file aside, so it "
+                      + "will not save anything over it. Repair or move the file, "
+                      + "then relaunch."
+        }
+    }
+
     private func finishStartup() async {
+        await reportStoreLoadFailure()
         let remotes = (try? await requireClientRemotes()) ?? []
         if !remotes.isEmpty { _ = try? await store.adoptNewRemotes(remotes) }
 

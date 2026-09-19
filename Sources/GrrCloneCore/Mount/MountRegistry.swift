@@ -106,11 +106,14 @@ public actor MountRegistry {
     /// ownership record, failed to mount, and its failure path forgot the record
     /// entirely. The live mount was then nobody's (#112).
     public func record(_ entry: Entry) throws {
-        if let existing = entries.first(where: { $0.mountPoint == entry.mountPoint }),
+        // As the filesystem compares, not as strings do: `~/Cloud` and `~/cloud`
+        // are one directory on a default macOS volume.
+        let key = Connection.folderKey(entry.mountPoint)
+        if let existing = entries.first(where: { Connection.folderKey($0.mountPoint) == key }),
            existing.connectionID != entry.connectionID {
-            throw Conflict.pathOwnedByAnotherConnection(entry.mountPoint)
+            throw Conflict.pathOwnedByAnotherConnection(existing.mountPoint)
         }
-        entries.removeAll { $0.mountPoint == entry.mountPoint }
+        entries.removeAll { Connection.folderKey($0.mountPoint) == key }
         entries.append(entry)
         try persist()
     }

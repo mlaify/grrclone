@@ -126,7 +126,7 @@ final class UnmountVerificationTests: XCTestCase {
         await manager.adoptActiveMountForTesting(
             ConnectionManager.ActiveMount(connection: first, serverID: "s1", mountPoint: point))
 
-        let second = Connection(remote: "box", displayName: "Cloud")
+        let second = Connection(remote: "box", displayName: "cloud")   // same folder, other case
         do {
             _ = try await manager.connect(second, mountRoot: dir)
             XCTFail("must refuse the shared folder")

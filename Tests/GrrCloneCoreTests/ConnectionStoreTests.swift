@@ -149,6 +149,71 @@ extension ConnectionStoreTests {
         XCTAssertEqual(Set(names), ["Cloud", "Box"], "the refused save must not have taken")
     }
 
+    /// `Cloud` and `cloud` are one folder on a default macOS volume, and so is a
+    /// name in composed and decomposed Unicode. The check compares as the
+    /// filesystem would. Codex caught the exact-string version.
+    func testDuplicateNamesAreCaughtAsTheFilesystemWouldSeeThem() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = ConnectionStore(fileURL: url)
+        try await store.upsert(Connection(remote: "dav1", displayName: "Cloud"))
+        try await store.upsert(Connection(remote: "s3", displayName: "Caf\u{00E9}"))   // é, composed
+
+        for clash in ["cloud", "CLOUD", "Cafe\u{0301}"] {   // e + combining acute
+            do {
+                try await store.upsert(Connection(remote: "box", displayName: clash))
+                XCTFail("\(clash) resolves to an existing folder and must be refused")
+            } catch is ConnectionStore.Conflict {
+                // expected
+            }
+        }
+        XCTAssertEqual(Connection.folderKey("Cloud"), Connection.folderKey("cLOUD"))
+        XCTAssertNotEqual(Connection.folderKey("Cloud"), Connection.folderKey("Clouds"))
+    }
+
+    /// Adoption's disambiguation uses the same key, or it would hand out `cloud`
+    /// beside `Cloud`.
+    func testAdoptionDisambiguatesCaseInsensitively() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = ConnectionStore(fileURL: url)
+        try await store.upsert(Connection(remote: "x", displayName: "Cloud"))
+        let added = try await store.adoptNewRemotes(["cloud"])
+        XCTAssertEqual(added.first?.displayName, "cloud 2")
+    }
+
+    /// If the unreadable file cannot be moved aside it is still the one copy of the
+    /// user's settings, and the next persist would replace it atomically — the very
+    /// loss this exists to prevent. So the store refuses to write at all. Simulated
+    /// by making the directory unwritable, which is what stops a rename in it.
+    func testAStoreThatCannotBeQuarantinedRefusesToWrite() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grrclone-store-locked-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let url = dir.appendingPathComponent("connections.json")
+        let original = Data("{ unreadable".utf8)
+        try original.write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+
+        let store = ConnectionStore(fileURL: url)
+        let failure = await store.loadFailure
+        XCTAssertNotNil(failure)
+        XCTAssertNil(failure?.quarantinedAt, "it could not be moved, and must not claim it was")
+        XCTAssertEqual(try Data(contentsOf: url), original, "the original is untouched")
+
+        do {
+            _ = try await store.adoptNewRemotes(["dav1"])
+            XCTFail("a write over the unreadable original must be refused")
+        } catch let conflict as ConnectionStore.Conflict {
+            guard case .unreadableStoreStillInPlace = conflict else { return XCTFail("\(conflict)") }
+        }
+        XCTAssertEqual(try Data(contentsOf: url), original, "and still untouched afterwards")
+    }
+
     /// Re-saving a connection under its own name is an edit, not a collision.
     func testUpsertAcceptsAConnectionKeepingItsOwnName() async throws {
         let url = temporaryURL()

@@ -88,6 +88,15 @@ final class MountSafetyTests: XCTestCase {
         let owner = await registry.entry(forMountPoint: path)
         XCTAssertEqual(owner?.connectionID, first, "the live mount's record must be untouched")
 
+        // The same folder spelled differently is the same folder on macOS.
+        do {
+            try await registry.record(.init(connectionID: second, mountPoint: "/Users/x/cloud",
+                                            transport: "nfs", serverID: "s2", port: 2, pid: 1))
+            XCTFail("must refuse: /Users/x/cloud is /Users/x/Cloud on a default volume")
+        } catch let conflict as MountRegistry.Conflict {
+            XCTAssertEqual(conflict, .pathOwnedByAnotherConnection(path), "names the owner's spelling")
+        }
+
         // Must not throw: the owner re-recording its own path is a remount.
         try await registry.record(.init(connectionID: first, mountPoint: path, transport: "nfs",
                                         serverID: "s3", port: 3, pid: 1))

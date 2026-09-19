@@ -137,7 +137,8 @@ public actor ConnectionManager {
         // ours? Two connections with one display name resolve to one folder, and
         // the second used to reach the registry, replace the first's ownership
         // record, fail to mount, and forget the record on the way out (#112).
-        if let other = active.values.first(where: { $0.mountPoint.path == mountPoint.path }) {
+        let key = Connection.folderKey(mountPoint.path)
+        if let other = active.values.first(where: { Connection.folderKey($0.mountPoint.path) == key }) {
             throw MountError.mountPointUnavailable(
                 "\(mountPoint.path) is already in use by the connection "
                 + "\"\(other.connection.displayName)\". Give this one a different name.")
