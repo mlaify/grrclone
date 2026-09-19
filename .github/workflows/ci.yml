@@ -45,7 +45,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: App/grrclone/Resources/rclone
-          key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
+          key: rclone-arm64-${{ hashFiles('scripts/fetch-rclone.sh') }}
 
       - name: Fetch the bundled rclone
         if: steps.rclone-cache.outputs.cache-hit != 'true'
@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: App/grrclone/Resources/rclone
-          key: rclone-universal-${{ hashFiles('scripts/fetch-rclone.sh') }}
+          key: rclone-arm64-${{ hashFiles('scripts/fetch-rclone.sh') }}
 
       # Fetched rather than stubbed. XcodeGen's optional:true keeps spec validation
       # happy when the binary is absent, but the copy-resources phase still runs and
