@@ -17,6 +17,19 @@ thing was built the way it was, and what was tried and rejected — lives in
   previous universal binary carried an Intel slice nothing could run, and the download
   is smaller for it. ([#122](https://github.com/mlaify/grrclone/issues/122))
 
+### Fixed
+
+- grrclone no longer mounts on top of a volume that is already mounted at the same
+  path. It refused only when it could see files there, so a dead mount whose listing
+  failed, or an empty one, got a new volume stacked on it — once per retry — which is
+  how three copies ended up on one folder. A mounted path is now refused outright,
+  before anything is listed. ([#108](https://github.com/mlaify/grrclone/issues/108))
+- A failure to read the list of mounted volumes is no longer treated as "nothing is
+  mounted". Read that way, it made grrclone forget every volume it owned and then
+  stop a leftover background process while those volumes were still up. It now
+  refuses to mount, to repair, or to stop anything until it can see the list.
+  ([#115](https://github.com/mlaify/grrclone/issues/115))
+
 ## [0.7.1] - 2026-09-19
 
 ### Fixed

@@ -39,7 +39,13 @@ public enum MountError: Error, LocalizedError {
 public struct NFSTransport: MountTransport {
     public let kind: TransportKind = .nfs
 
-    public init() {}
+    private let mountTable: SystemMounts.Reader
+
+    /// - Parameter mountTable: how to read what is mounted. Injected so a test can
+    ///   make the read fail, which `getmntinfo` will not do on request.
+    public init(mountTable: @escaping SystemMounts.Reader = { try await SystemMounts.current() }) {
+        self.mountTable = mountTable
+    }
 
     /// Only keys from rclone's `vfs` and `nfs` option blocks are valid here. `serve/start`
     /// rejects the whole request with `unknown parameters` if given anything else, so
@@ -93,10 +99,19 @@ public struct NFSTransport: MountTransport {
         guard let port = server.port, port > 0 else {
             throw MountError.noPort(server.addr)
         }
-        // Count what is already mounted there, so a refusal can say why rather than
-        // counting files that are really another volume's contents.
-        let stacked = (try? await SystemMounts.current())?
-            .filter { $0.mountPoint == mountPoint.path }.count ?? 0
+        // Count what is already mounted there. This decides whether to mount at all,
+        // not only how to word a refusal, so an unreadable table is a refusal too: a
+        // mount made blind onto a path that already has one is the stacked-mount
+        // state #108 exists to prevent.
+        let stacked: Int
+        do {
+            stacked = try await mountTable().filter { $0.mountPoint == mountPoint.path }.count
+        } catch {
+            throw MountError.mountPointUnavailable(
+                "grrclone could not read the mount table, so it cannot tell whether "
+                + "\(mountPoint.path) already has a volume on it, and will not mount "
+                + "there without knowing.")
+        }
         try Self.prepareMountPoint(mountPoint, existingMounts: stacked)
 
         let options = Self.mountOptions(port: port, readOnly: connection.options.readOnly)
@@ -141,6 +156,19 @@ public struct NFSTransport: MountTransport {
     /// non-empty directory is deliberate: doing so hides the user's files for as long as
     /// the mount lasts, and they look deleted.
     static func prepareMountPoint(_ url: URL, existingMounts: Int = 0) throws {
+        // A path with a mount on it is never a valid mount point for us, whatever it
+        // looks like inside. This has to come before the listing, and not be keyed
+        // on it: the first version refused only when the directory had visible
+        // entries, so a dead mount whose listing returned EIO (`try?` → empty) and
+        // an empty live volume were both mounted over again. Every retry — a health
+        // repair after sleep, connect-at-login, a click — added a layer, which is
+        // how three NFS mounts ended up stacked on one path (#108). Not listing it
+        // also means a wedged mount cannot block this call for the NFS timeout.
+        guard existingMounts == 0 else {
+            throw MountError.mountPointUnavailable(
+                Self.whyUnusable(path: url.path, itemCount: 0, existingMounts: existingMounts))
+        }
+
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
 

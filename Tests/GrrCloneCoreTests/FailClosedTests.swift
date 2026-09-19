@@ -1,4 +1,5 @@
 import XCTest
+import RcloneRC
 @testable import GrrCloneCore
 
 /// The cluster of fail-open defects found by the 2026-09-18 audit.
@@ -19,6 +20,111 @@ final class FailClosedTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    // MARK: - The mount table (#115, #108)
+
+    /// A supervisor that is never started. `ConnectionManager` needs one to exist;
+    /// none of these paths ever talk to it.
+    private func idleSupervisor() -> DaemonSupervisor {
+        DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"), runtimeDirectory: dir)
+    }
+
+    private func entry(_ path: String) -> MountRegistry.Entry {
+        MountRegistry.Entry(connectionID: UUID(), mountPoint: path, transport: "nfs",
+                            serverID: nil, port: nil, pid: 1)
+    }
+
+    /// `getmntinfo` returning 0 is an error — `/` is always mounted — and the old
+    /// `?? []` made it read as "none of our mounts are up". That forgot every entry,
+    /// reported them all as cleaned, and so authorised killing the orphan daemon
+    /// under live mounts. Nothing may be forgotten and the kill must be refused.
+    func testUnreadableMountTableKeepsEveryRecordAndRefusesTheKill() async throws {
+        let registry = MountRegistry(fileURL: dir.appendingPathComponent("mounts.json"))
+        try await registry.record(entry("/Users/x/Cloud"))
+        try await registry.record(entry("/Users/x/CloudVaults"))
+
+        let manager = ConnectionManager(
+            supervisor: idleSupervisor(), registry: registry,
+            mountTable: { throw SystemMounts.MountTableError.unreadable })
+
+        let outcome = await manager.unmountRecordedMounts()
+        XCTAssertEqual(Set(outcome.stillMounted), ["/Users/x/Cloud", "/Users/x/CloudVaults"],
+                       "every recorded mount must be reported as still up: nothing was established")
+        XCTAssertTrue(outcome.unmounted.isEmpty)
+
+        let report = try await manager.reconcileOrphans()
+        XCTAssertTrue(report.tableUnreadable)
+        XCTAssertTrue(report.cleaned.isEmpty, "nothing was cleaned, so nothing may say it was")
+
+        let remaining = await registry.all.map(\.mountPoint)
+        XCTAssertEqual(Set(remaining), ["/Users/x/Cloud", "/Users/x/CloudVaults"],
+                       "an unreadable table must not forget a single owned mount")
+    }
+
+    /// With a readable table the same records are handled as before: one not in the
+    /// table is stale and forgotten. This is the control for the test above.
+    func testReadableMountTableStillClearsStaleRecords() async throws {
+        let registry = MountRegistry(fileURL: dir.appendingPathComponent("mounts.json"))
+        try await registry.record(entry("/Users/x/Gone"))
+
+        let manager = ConnectionManager(
+            supervisor: idleSupervisor(), registry: registry,
+            mountTable: { [SystemMounts.MountEntry(source: "/dev/disk1", mountPoint: "/", fileSystemType: "apfs")] })
+
+        let report = try await manager.reconcileOrphans()
+        XCTAssertEqual(report.cleaned, ["/Users/x/Gone"])
+        XCTAssertFalse(report.tableUnreadable)
+        let remaining = await registry.all
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    /// The mechanism behind three NFS mounts stacked on one folder. The directory is
+    /// empty — a dead mount's listing fails, or the volume simply has nothing in it —
+    /// and the old check, keyed on visible entries, let the mount proceed.
+    func testRefusesToMountOverAnExistingMountEvenWhenItLooksEmpty() throws {
+        let point = dir.appendingPathComponent("Cloud")
+        try FileManager.default.createDirectory(at: point, withIntermediateDirectories: true)
+
+        XCTAssertNoThrow(try NFSTransport.prepareMountPoint(point, existingMounts: 0),
+                         "an empty directory with nothing mounted on it is fine")
+        XCTAssertThrowsError(try NFSTransport.prepareMountPoint(point, existingMounts: 1)) { error in
+            let text = error.localizedDescription
+            XCTAssertTrue(text.contains("already mounted"), text)
+            XCTAssertTrue(text.contains("umount -f"), "must say how to clear it: \(text)")
+        }
+        XCTAssertThrowsError(try NFSTransport.prepareMountPoint(point, existingMounts: 3)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("3 volumes are stacked"),
+                          error.localizedDescription)
+        }
+    }
+
+    /// Mounting blind is the same mistake one step earlier: if the table cannot be
+    /// read, whether the path already has a volume on it is unknown, and unknown is
+    /// a refusal.
+    func testMountRefusesWhenTheMountTableCannotBeRead() async throws {
+        let point = dir.appendingPathComponent("Blind")
+        let transport = NFSTransport(mountTable: { throw SystemMounts.MountTableError.unreadable })
+        let server = RcloneRCClient.Server(id: "s1", addr: "127.0.0.1:2049")
+
+        do {
+            try await transport.mount(connection: Connection(remote: "x"), server: server, at: point)
+            XCTFail("must not reach /sbin/mount")
+        } catch let error as MountError {
+            guard case .mountPointUnavailable(let why) = error else {
+                return XCTFail("wrong refusal: \(error)")
+            }
+            XCTAssertTrue(why.contains("could not read the mount table"), why)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: point.path),
+                       "refusing before the listing means nothing was created either")
+    }
+
+    /// The real table is never empty. If this ever fails, `current()` is throwing on
+    /// a healthy machine, and the fail-closed paths above would refuse everything.
+    func testTheRealMountTableAlwaysHoldsRoot() async throws {
+        let table = try await SystemMounts.current()
+        XCTAssertTrue(table.contains { $0.mountPoint == "/" })
     }
 
     // MARK: - MountRegistry (#75)

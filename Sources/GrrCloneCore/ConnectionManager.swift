@@ -14,6 +14,7 @@ public actor ConnectionManager {
     private let registry: MountRegistry
     private let cacheRoot: URL
     private let transports: [TransportKind: any MountTransport]
+    private let mountTable: SystemMounts.Reader
     private var active: [UUID: ActiveMount] = [:]
 
     /// Filesystems with a mount in progress.
@@ -25,14 +26,18 @@ public actor ConnectionManager {
     /// decide its cache is idle.
     private var connecting: Set<String> = []
 
+    /// - Parameter mountTable: how to read what is mounted. Injected so a test can
+    ///   make the read fail and prove the manager fails closed when it does.
     public init(supervisor: DaemonSupervisor,
                 registry: MountRegistry,
                 cacheRoot: URL? = nil,
-                transports: [any MountTransport] = [NFSTransport()]) {
+                transports: [any MountTransport] = [NFSTransport()],
+                mountTable: @escaping SystemMounts.Reader = { try await SystemMounts.current() }) {
         self.supervisor = supervisor
         self.registry = registry
         self.cacheRoot = cacheRoot ?? Self.defaultCacheRoot()
         self.transports = Dictionary(uniqueKeysWithValues: transports.map { ($0.kind, $0) })
+        self.mountTable = mountTable
     }
 
     /// Teach the supervisor to bring our mounts down before it kills an orphaned
@@ -560,6 +565,9 @@ public actor ConnectionManager {
         public var cleaned: [String] = []
         public var stillMounted: [String] = []
         public var skippedNotOurs: [String] = []
+        /// True when the mount table could not be read. Every recorded mount is then
+        /// in `stillMounted`, because nothing was established about any of them.
+        public var tableUnreadable = false
     }
 
     /// Clean up mounts left behind by a previous run that did not shut down cleanly.
@@ -575,7 +583,22 @@ public actor ConnectionManager {
         let owned = await registry.all
         guard !owned.isEmpty else { return report }
 
-        let table = (try? await SystemMounts.current()) ?? []
+        // An unreadable table is not an empty one. Reading it as empty made every
+        // owned entry look stale: each was forgotten and reported as cleaned, the
+        // orphan cleanup then reported a clean sweep, and the supervisor killed the
+        // orphan daemon under mounts that were still up (#115). Nothing is known, so
+        // nothing is forgotten and everything is reported as still mounted — which
+        // is the answer that refuses the kill.
+        let table: [SystemMounts.MountEntry]
+        do {
+            table = try await mountTable()
+        } catch {
+            report.tableUnreadable = true
+            report.stillMounted = owned.map(\.mountPoint).filter { path in
+                !active.values.contains { $0.mountPoint.path == path }
+            }
+            return report
+        }
         let mountedPaths = Set(table.map(\.mountPoint))
 
         for entry in owned {
@@ -722,6 +745,12 @@ public actor ConnectionManager {
             case .healthy:
                 report.healthy.append(mount.connection.id)
 
+            case .unknown:
+                // Nothing was established, so nothing is done. Tearing a mount down
+                // and rebuilding it on a guess is the kind of repair that causes the
+                // damage it claims to fix.
+                report.failed[mount.connection.id] = "could not read the mount table"
+
             case .unresponsive, .gone:
                 guard repair else {
                     report.failed[mount.connection.id] = "not responding"
@@ -795,7 +824,9 @@ public actor ConnectionManager {
     /// Reported for diagnostics only — never unmounted. On a machine where the user also
     /// runs rclone by hand, these are their mounts.
     public func foreignLookalikes() async -> [ForeignMount] {
-        let table = (try? await SystemMounts.current()) ?? []
+        // Diagnostics only, never acted on, so an unreadable table may read as
+        // "nothing to show" here. The safety paths above do not get that latitude.
+        let table = (try? await mountTable()) ?? []
         let owned = Set(await registry.all.map(\.mountPoint))
         return ForeignMount.group(
             table.filter { $0.isLoopbackNFS && !owned.contains($0.mountPoint) }
