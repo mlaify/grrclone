@@ -93,7 +93,11 @@ public struct NFSTransport: MountTransport {
         guard let port = server.port, port > 0 else {
             throw MountError.noPort(server.addr)
         }
-        try Self.prepareMountPoint(mountPoint)
+        // Count what is already mounted there, so a refusal can say why rather than
+        // counting files that are really another volume's contents.
+        let stacked = (try? await SystemMounts.current())?
+            .filter { $0.mountPoint == mountPoint.path }.count ?? 0
+        try Self.prepareMountPoint(mountPoint, existingMounts: stacked)
 
         let options = Self.mountOptions(port: port, readOnly: connection.options.readOnly)
         let result = try await Shell.run(
@@ -136,7 +140,7 @@ public struct NFSTransport: MountTransport {
     /// The mount point must exist and be an empty directory. Refusing to mount over a
     /// non-empty directory is deliberate: doing so hides the user's files for as long as
     /// the mount lasts, and they look deleted.
-    static func prepareMountPoint(_ url: URL) throws {
+    static func prepareMountPoint(_ url: URL, existingMounts: Int = 0) throws {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
 
@@ -148,13 +152,38 @@ public struct NFSTransport: MountTransport {
             let meaningful = contents.filter { $0 != ".DS_Store" }
             guard meaningful.isEmpty else {
                 throw MountError.mountPointUnavailable(
-                    "\(url.path) is not empty. Mounting there would hide \(meaningful.count) existing item(s).")
+                    Self.whyUnusable(path: url.path, itemCount: meaningful.count,
+                                     existingMounts: existingMounts))
             }
         } else {
             try fm.createDirectory(at: url, withIntermediateDirectories: true)
         }
 
         try? protectWhileUnmounted(url)
+    }
+
+    /// Why a mount point cannot be used, distinguishing the two causes.
+    ///
+    /// Counting directory entries answers "is it empty" and not "why". Observed on a
+    /// real machine: three NFS mounts stacked on one path, and grrclone reported
+    /// *"is not empty. Mounting there would hide 582 existing item(s)"*. There were
+    /// no local files at all — the 582 were the contents of whichever mount was on
+    /// top. The message sent the user to move files that did not exist, while the
+    /// actual fix was to unmount three volumes.
+    ///
+    /// The refusal is right either way; only the explanation changes.
+    static func whyUnusable(path: String, itemCount: Int, existingMounts: Int) -> String {
+        guard existingMounts > 0 else {
+            return "\(path) is not empty. Mounting there would hide \(itemCount) existing item(s)."
+        }
+        let what = existingMounts == 1
+            ? "Something is already mounted at \(path)"
+            : "\(existingMounts) volumes are stacked at \(path)"
+        return "\(what), and grrclone did not mount \(existingMounts == 1 ? "it" : "them"). "
+             + "What you can see there belongs to that volume, not to your disk. "
+             + "Disconnect \(existingMounts == 1 ? "it" : "them") first — "
+             + "`diskutil umount force \(path)`"
+             + (existingMounts > 1 ? ", once per mount." : ".")
     }
 
     /// Make a mountpoint unwritable while nothing is mounted on it.

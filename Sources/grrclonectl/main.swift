@@ -167,7 +167,7 @@ do {
         print("cleaned:      \(report.cleaned.isEmpty ? "none" : report.cleaned.joined(separator: ", "))")
         print("still stuck:  \(report.stillMounted.isEmpty ? "none" : report.stillMounted.joined(separator: ", "))")
         let foreign = await manager.foreignLookalikes()
-        print("not ours:     \(foreign.isEmpty ? "none" : foreign.joined(separator: ", "))")
+        print("not ours:     \(foreign.isEmpty ? "none" : foreign.map { $0.count > 1 ? "\($0.path) (mounted \($0.count) times)" : $0.path }.joined(separator: ", "))")
         await supervisor.stop()
 
     case "recovery-test":

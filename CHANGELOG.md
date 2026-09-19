@@ -11,6 +11,17 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- A freshly upgraded copy no longer quits itself when launched while the previous
+  copy is still disconnecting. It used to refuse on sight, and a quit can take minutes
+  when uploads are draining — so "the new version is broken" was really "it gave up
+  too early". It now waits, bounded, and only refuses if the old copy never exits.
+- When a mount point cannot be used because something is *already mounted* there,
+  grrclone now says so and how to disconnect it, instead of counting that volume's
+  files and telling you to move them. The menu also shows one line per path with
+  a count when the same path is mounted several times over, rather than repeating it.
+
 ## [0.7.0] - 2026-09-19
 
 ### Added

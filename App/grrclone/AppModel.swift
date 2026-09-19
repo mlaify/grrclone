@@ -26,7 +26,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var rows: [Row] = []
     @Published private(set) var status: String = "Starting"
     @Published private(set) var daemonReady = false
-    @Published private(set) var foreignMounts: [String] = []
+    @Published private(set) var foreignMounts: [ForeignMount] = []
     /// Set when the previous session did not shut down cleanly. Stays until the user
     /// dismisses it: a transient status line is the wrong shape for the one case
     /// where their data may actually have been affected.

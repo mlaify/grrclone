@@ -286,12 +286,22 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Not managed by grrclone")
                 .font(.caption.weight(.medium))
-            ForEach(model.foreignMounts, id: \.self) { path in
-                Text(path)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+            ForEach(model.foreignMounts) { mount in
+                HStack(spacing: 6) {
+                    Text(mount.path)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                    if mount.count > 1 {
+                        // Stacked mounts: the same path mounted repeatedly. Saying so
+                        // is what turns "grrclone refused to mount here" from a
+                        // mystery into a diagnosis.
+                        Text("×\(mount.count)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.orange)
+                    }
+                }
             }
         }
         .padding(.horizontal, 12)

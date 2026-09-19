@@ -794,11 +794,11 @@ public actor ConnectionManager {
     /// Paths in the mount table that look like ours but are not recorded as owned.
     /// Reported for diagnostics only — never unmounted. On a machine where the user also
     /// runs rclone by hand, these are their mounts.
-    public func foreignLookalikes() async -> [String] {
+    public func foreignLookalikes() async -> [ForeignMount] {
         let table = (try? await SystemMounts.current()) ?? []
         let owned = Set(await registry.all.map(\.mountPoint))
-        return table
-            .filter { $0.isLoopbackNFS && !owned.contains($0.mountPoint) }
-            .map(\.mountPoint)
+        return ForeignMount.group(
+            table.filter { $0.isLoopbackNFS && !owned.contains($0.mountPoint) }
+                 .map(\.mountPoint))
     }
 }
