@@ -23,10 +23,17 @@ public actor ConnectionStore {
     public struct LoadFailure: Sendable, Equatable {
         public let reason: String
         /// Where the unreadable file now sits, so a person can read it — it is JSON
-        /// — and restore what they had.
-        public let quarantinedAt: URL
+        /// — and restore what they had. Nil when it could not be moved aside, in
+        /// which case it is still where it was and this store refuses to write.
+        public let quarantinedAt: URL?
     }
     private(set) public var loadFailure: LoadFailure?
+
+    /// True when the original file is unreadable *and* still in place. Every write
+    /// is refused until then: persisting would atomically replace the one copy of
+    /// the user's settings, which is the data loss this type exists to prevent.
+    /// Codex pointed out that a failed move silently reopened that path.
+    private var refusingWrites = false
 
     public init(fileURL: URL? = nil) {
         let url = fileURL ?? Self.defaultURL()
@@ -36,18 +43,34 @@ public actor ConnectionStore {
         } catch {
             self.connections = []
             let aside = Self.quarantine(url)
+            self.refusingWrites = aside == nil
             self.loadFailure = LoadFailure(reason: error.localizedDescription, quarantinedAt: aside)
         }
     }
 
     /// Move an unreadable store aside rather than overwrite it. The next write
     /// starts from a known-empty file; the old one stays for a human to recover.
-    private static func quarantine(_ url: URL) -> URL {
+    ///
+    /// Returns nil if it could not be moved — and then it must not be written over.
+    /// The destination never pre-exists: a fresh name is chosen while one does.
+    private static func quarantine(_ url: URL) -> URL? {
         let stamp = ISO8601DateFormatter()
         stamp.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime]
-        let aside = url.deletingLastPathComponent()
-            .appendingPathComponent("\(url.lastPathComponent).unreadable-\(stamp.string(from: Date()))")
-        try? FileManager.default.moveItem(at: url, to: aside)
+        let base = "\(url.lastPathComponent).unreadable-\(stamp.string(from: Date()))"
+        var aside = url.deletingLastPathComponent().appendingPathComponent(base)
+        var attempt = 2
+        while FileManager.default.fileExists(atPath: aside.path) {
+            aside = url.deletingLastPathComponent().appendingPathComponent("\(base)-\(attempt)")
+            attempt += 1
+        }
+        do {
+            try FileManager.default.moveItem(at: url, to: aside)
+        } catch {
+            return nil
+        }
+        // Only a file that is verifiably out of the way counts as quarantined.
+        guard FileManager.default.fileExists(atPath: aside.path),
+              !FileManager.default.fileExists(atPath: url.path) else { return nil }
         return aside
     }
 
@@ -56,8 +79,11 @@ public actor ConnectionStore {
         /// The display name is the mount folder, and two connections must never
         /// resolve to the same one: the second to connect would overwrite the
         /// first's ownership record and, on the failure that follows, forget it
-        /// (#112).
+        /// (#112). Compared as the filesystem would, so `Cloud` and `cloud` clash.
         case displayNameTaken(String, by: String)
+        /// The store file could not be read and could not be moved aside, so
+        /// nothing will be written over it.
+        case unreadableStoreStillInPlace(String)
 
         public var errorDescription: String? {
             switch self {
@@ -65,6 +91,9 @@ public actor ConnectionStore {
                 return "The name \"\(name)\" is already used by the connection for "
                      + "\(other). Each connection needs its own, because the name is "
                      + "also its mount folder."
+            case .unreadableStoreStillInPlace(let path):
+                return "grrclone could not read \(path) and could not move it aside, so "
+                     + "it will not save over it. Move or repair the file, then relaunch."
             }
         }
     }
@@ -84,8 +113,9 @@ public actor ConnectionStore {
     }
 
     public func upsert(_ connection: Connection) throws {
+        let key = Connection.folderKey(connection.displayName)
         if let clash = connections.first(where: {
-            $0.id != connection.id && $0.displayName == connection.displayName
+            $0.id != connection.id && Connection.folderKey($0.displayName) == key
         }) {
             throw Conflict.displayNameTaken(connection.displayName, by: clash.remote)
         }
@@ -124,16 +154,17 @@ public actor ConnectionStore {
     }
 
     func uniqueDisplayName(for base: String) -> String {
-        let taken = Set(connections.map(\.displayName))
-        guard taken.contains(base) else { return base }
+        let taken = Set(connections.map { Connection.folderKey($0.displayName) })
+        guard taken.contains(Connection.folderKey(base)) else { return base }
         var suffix = 2
-        while taken.contains("\(base) \(suffix)") { suffix += 1 }
+        while taken.contains(Connection.folderKey("\(base) \(suffix)")) { suffix += 1 }
         return "\(base) \(suffix)"
     }
 
     // MARK: - Persistence
 
     private func persist() throws {
+        guard !refusingWrites else { throw Conflict.unreadableStoreStillInPlace(fileURL.path) }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(connections).write(to: fileURL, options: .atomic)
