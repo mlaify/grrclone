@@ -69,6 +69,9 @@ struct SettingsView: View {
         .sheet(item: $model.deletingConnection) { connection in
             DeleteRemoteSheet(connection: connection, model: model)
         }
+        .sheet(item: $model.editingConnection) { connection in
+            EditRemoteSheet(connection: connection, model: model)
+        }
         // Land on something useful. Opening to an empty pane and a "Choose…" prompt
         // makes the user do a step the app can do for them, and with one remote
         // configured there is nothing to choose.
@@ -276,14 +279,16 @@ private struct ConnectionDetail: View {
             // words mean very different things.
             Section {
                 HStack {
+                    Button("Edit Remote…") { model.beginEditing(connection) }
+                    Spacer()
                     Button("Delete Remote…", role: .destructive) {
                         model.beginDeleting(connection)
                     }
-                    Spacer()
                 }
             } footer: {
-                Text("Removes the connection and its saved credentials. Your files on "
-                     + "the storage provider are not touched.")
+                Text("Edit changes the credentials and endpoint rclone uses. Delete "
+                     + "removes the connection entirely — your files on the storage "
+                     + "provider are not touched either way.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }

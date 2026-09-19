@@ -86,6 +86,44 @@ extension RcloneRCClient {
         _ = try await call("config/delete", ["name": .string(name)])
     }
 
+    /// One remote's stored settings, exactly as they sit in `rclone.conf`.
+    ///
+    /// **Secrets come back obscured, not in plaintext.** `rclone reveal` undoes that
+    /// in one step, so these values are not safe to display — and showing one in a
+    /// `SecureField` would imply it is the password, which it is not.
+    public func remoteConfig(name: String) async throws -> [String: String] {
+        let result = try await call("config/dump")
+        guard let section = result[name]?.objectValue else {
+            throw RcloneRCError.unexpectedResponse("There is no remote called \(name).")
+        }
+        return section.compactMapValues { $0.stringValue }
+    }
+
+    /// Change an existing remote's settings.
+    ///
+    /// Only send keys the user actually changed. rclone decides whether to obscure a
+    /// value by *trying to reveal it first* — if that succeeds it assumes the value
+    /// is already obscured and stores it unchanged. That heuristic is right almost
+    /// always and wrong in a way worth avoiding: a literal password that happens to
+    /// be a valid obscured string gets revealed instead of obscured, so the stored
+    /// password becomes something the user never typed. Measured, not supposed:
+    /// writing `rclone obscure hunter2`'s output as a plaintext password stored
+    /// `hunter2`.
+    ///
+    /// `obscure: true` overrides the guess and obscures whatever it is given, which
+    /// is correct for every value this app sends — because the app only ever sends a
+    /// secret the user has just typed in the clear. Verified: with the flag set, that
+    /// same literal string round-trips intact.
+    public func updateRemote(name: String, parameters: [String: String],
+                             obscureSecrets: Bool = true) async throws {
+        _ = try await call("config/update", [
+            "name": .string(name),
+            "parameters": .object(parameters.mapValues { JSONValue.string($0) }),
+            "opt": .object(["obscure": .bool(obscureSecrets),
+                            "nonInteractive": .bool(true)]),
+        ])
+    }
+
     static func parseProviders(_ value: JSONValue) -> [Provider] {
         guard let list = value["providers"]?.arrayValue else { return [] }
 
