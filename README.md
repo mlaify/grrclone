@@ -40,7 +40,13 @@ would find it, so the requirement is circular for something new. The cask passes
 audit; only that rule fails. It will go to homebrew-cask unchanged once the bar is
 met.
 
-Homebrew owns installs: `brew update && brew upgrade --cask grrclone`. grrclone can be asked to
+Homebrew owns installs: `brew update && brew upgrade --cask grrclone`. If you would
+rather not remember that, [`brew autoupdate`](https://github.com/DomT4/homebrew-autoupdate)
+runs it for you on a schedule — `brew autoupdate start --upgrade` — and grrclone will
+simply stop telling you about versions you already have. It is not installed by
+default and grrclone does not assume it.
+
+grrclone can be asked to
 *check* for new releases, but it never replaces its own bundle — two updaters owning
 one app is how a self-updating copy gets silently downgraded by the next upgrade.
 Release candidates are not served by the cask; they come from the releases page.

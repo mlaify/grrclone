@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-19
+
 ### Added
 
 - **grrclone now tells you when an update exists**, instead of waiting to be asked.
@@ -27,9 +29,6 @@ thing was built the way it was, and what was tried and rejected — lives in
   when you opt in rather than at first launch, and declining costs nothing else — the
   check still runs and the icon still marks the update. The same version is never
   announced twice.
-
-### Added
-
 - Releases now carry a **Sigstore-signed build provenance attestation**, logged to a
   public transparency log. Anyone can verify which commit and workflow produced a
   given download with `gh attestation verify grrclone.dmg --repo mlaify/grrclone` —
@@ -183,7 +182,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mlaify/grrclone/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/mlaify/grrclone/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/mlaify/grrclone/compare/v0.4.0...v0.6.0
 [0.4.0]: https://github.com/mlaify/grrclone/compare/v0.3.2...v0.4.0
