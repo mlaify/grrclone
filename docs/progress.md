@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.6.1 is released**, and installable two ways:
+**v0.7.0 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-270 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+280 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -37,8 +37,44 @@ did not before, and which was proved rather than assumed.
 | v0.4.0 | **Released** 2026-09-18 |
 | v0.6.0 | **Released** 2026-09-19 |
 | v0.6.1 | **Released** 2026-09-19 |
+| v0.7.0 | **Released** 2026-09-19 |
 
 ## Releases
+
+### v0.7.0 — 2026-09-19
+
+About being told an update exists without having to go looking, and about proving
+where a build came from.
+
+grrclone now asks GitHub once a day while running rather than only at launch — a
+menu bar app runs for weeks, so the old behaviour meant anyone who started it before
+a release never heard about it. An available update marks the menu bar icon, the one
+surface people see daily, and posts a notification.
+
+That notification is the app's **one permission**, asked when the user turns checks
+on rather than at first launch, and declining costs nothing else. Someone whose
+preference was already on from an earlier version is asked at launch instead — a
+stored property's `didSet` does not fire during initialisation, so they would
+otherwise have had a feature that silently never worked.
+
+Releases now carry a Sigstore-signed provenance attestation, logged to a public
+transparency log, binding the DMG's digest to the commit and workflow that built it.
+That is a different guarantee from notarisation and one a stolen signing certificate
+would not defeat.
+
+**Self-installing updates were considered and rejected** — the design is in #97. The
+verification chain was tractable; the cost was not. grrclone currently cannot install
+code, which is a property worth keeping in an unsandboxed program that mounts your
+storage, and Sparkle would have had to be taught to wait for an ordered teardown that
+can legitimately run for minutes. For anyone who wants updates to simply happen,
+`brew autoupdate` does it with no new attack surface in this app.
+
+Two corrections worth recording. The upgrade command grrclone shows now runs
+`brew update` first: `brew upgrade` refreshes on its own only once every 24 hours,
+so a user who had run brew earlier the same day would be told they were current
+against a stale tap while this app said otherwise. And `brew autoupdate` is a
+separate tap entirely, not a built-in — conflating the two is what produced the
+wrong command in the first place.
 
 ### v0.6.1 — 2026-09-19
 

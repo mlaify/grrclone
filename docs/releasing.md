@@ -146,6 +146,32 @@ So the division is clean: **Homebrew installs, grrclone informs.** The Updates t
 detects a Homebrew installation from the Caskroom and says `brew upgrade --cask
 grrclone` instead of offering a download.
 
+### For users who will never run a command
+
+grrclone does not install its own updates, and that is settled — see #97 for the
+design that was considered and the reasons against it. The gap it leaves is real
+though: someone who never opens the app and never runs brew hears nothing.
+
+Two things close most of it, in order of how little they ask of the user:
+
+1. **`brew autoupdate`** — a third-party tap, not part of Homebrew, that installs a
+   launchd agent to run `brew update` and optionally `brew upgrade` on a schedule:
+
+   ```bash
+   brew tap domt4/autoupdate
+   brew autoupdate start --upgrade
+   ```
+
+   The only mechanism here that works with grrclone closed. Two caveats to state
+   whenever recommending it: the tap must be added first — the subcommand does not
+   exist on a stock install — and `--upgrade` upgrades **everything** Homebrew
+   manages, not just grrclone.
+2. **grrclone's own notification** — asks GitHub once a day while running, marks the
+   menu bar icon, and posts a notification. Reaches anyone whose app is running,
+   which for a login item is most people, but not someone who quit it.
+
+Neither replaces the other and neither is on by default.
+
 ### Pre-releases
 
 One cask serves one channel; there is no per-user opt-in to pre-releases within a
