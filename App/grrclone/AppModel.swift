@@ -733,9 +733,20 @@ final class AppModel: ObservableObject {
             // longer exists — it survives in memory, disappears on the next launch,
             // and reappears if the file is ever re-read. Say so rather than reporting
             // an unqualified success.
+            // Every connection to that remote, not only this one. The others now
+            // point at configuration that does not exist; left in the list they would
+            // fail to connect forever with an error that names a remote the user
+            // just deleted. None of them is mounted — deleteRemote refuses otherwise.
+            let siblings = rows.map(\.connection).filter {
+                $0.id != connection.id && $0.remote == connection.remote
+            }
             var storeWarning = ""
             do {
                 try await store.remove(id: connection.id)
+                for sibling in siblings {
+                    try await store.remove(id: sibling.id)
+                    needsRemount.remove(sibling.id)
+                }
             } catch {
                 storeWarning = " grrclone could not update its own list of connections, "
                              + "so \(connection.displayName) may reappear until you "
@@ -745,8 +756,11 @@ final class AppModel: ObservableObject {
 
             cancelDeleting()
             await refresh()
-            status = "Deleted \(connection.displayName). "
-                   + "Configuration backed up to \(outcome.backup.lastPathComponent)."
+            let alsoRemoved = siblings.isEmpty ? ""
+                : " Also removed \(siblings.map(\.displayName).joined(separator: ", ")), "
+                  + "which used the same remote."
+            status = "Deleted \(connection.displayName)." + alsoRemoved
+                   + " Configuration backed up to \(outcome.backup.lastPathComponent)."
                    + storeWarning
             return true
         } catch {

@@ -337,10 +337,13 @@ public actor ConnectionManager {
 
     // MARK: - Cache
 
-    public enum CacheRefusal: Error, LocalizedError {
+    public enum CacheRefusal: Error, LocalizedError, Equatable {
         case pendingUploads(files: [String])
         case cacheUnreadable
         case stillMounted
+        /// Another connection's live mount is serving from a cache that contains,
+        /// or is contained by, this one.
+        case cacheInUse(by: String)
 
         public var errorDescription: String? {
             switch self {
@@ -357,9 +360,12 @@ public actor ConnectionManager {
             case .stillMounted:
                 return "Disconnect this remote before clearing its cache. rclone is "
                      + "serving files from it, and deleting them underneath a live "
-                     + "mount produces read errors in Finder. If another connection "
-                     + "points at the same remote and folder, they share one cache, "
-                     + "so that one has to be disconnected too."
+                     + "mount produces read errors in Finder."
+            case .cacheInUse(let other):
+                return "Disconnect \(other) before clearing this cache. Its cache and "
+                     + "this one overlap — a folder of a remote is cached inside the "
+                     + "remote's own cache — so clearing this would delete files rclone "
+                     + "is serving to that volume."
             }
         }
     }
@@ -380,7 +386,7 @@ public actor ConnectionManager {
         return result
     }
 
-    /// Whether anything is serving this filesystem right now.
+    /// Whether anything is serving from a cache that overlaps this filesystem's.
     ///
     /// By `fsSpec`, never by connection id. The cache directory is named from
     /// `fsSpec`, so two stored connections pointing at the same remote and subpath
@@ -388,10 +394,20 @@ public actor ConnectionManager {
     /// somewhere else — share one cache. Checking the id alone would let a
     /// disconnected connection clear the cache its mounted twin is reading from.
     ///
+    /// By *overlap*, not equality. `dav1:photos` is cached inside `dav1:`'s
+    /// directory, so an exact match let a disconnected `dav1:` clear the cache a
+    /// mounted `dav1:photos` was serving from (#114).
+    ///
     /// Includes mounts still being established, which are in neither `active` nor
     /// the mount table yet.
     func isServing(fsSpec: String) -> Bool {
-        active.values.contains { $0.connection.fsSpec == fsSpec } || connecting.contains(fsSpec)
+        servingMount(overlapping: fsSpec) != nil
+            || connecting.contains { VFSCache.cachesOverlap($0, fsSpec) }
+    }
+
+    /// The live mount, if any, whose cache overlaps `fsSpec`.
+    func servingMount(overlapping fsSpec: String) -> ActiveMount? {
+        active.values.first { VFSCache.cachesOverlap($0.connection.fsSpec, fsSpec) }
     }
 
     /// Reclaim a connection's cache.
@@ -405,6 +421,11 @@ public actor ConnectionManager {
     /// them underneath a live mount produces read errors rather than a clean re-fetch.
     @discardableResult
     public func clearCache(for connection: Connection) async throws -> Int64 {
+        if let live = servingMount(overlapping: connection.fsSpec) {
+            throw live.connection.id == connection.id
+                ? CacheRefusal.stillMounted
+                : CacheRefusal.cacheInUse(by: live.connection.displayName)
+        }
         guard !isServing(fsSpec: connection.fsSpec) else { throw CacheRefusal.stillMounted }
 
         let root = try await rcloneCacheRoot()
@@ -422,11 +443,15 @@ public actor ConnectionManager {
     // MARK: - Deleting a remote
 
     /// Why a deletion was refused, or what it achieved.
-    public enum DeletionRefusal: Error, LocalizedError {
+    public enum DeletionRefusal: Error, LocalizedError, Equatable {
         case pendingUploads(files: [String])
         case cacheUnreadable
         case noSuchRemote(String)
         case stillMounted(String)
+        /// Another connection on the same remote is mounted. Deleting the remote's
+        /// configuration would leave that volume with no configuration to come back
+        /// to, and purging the cache would delete files it is serving.
+        case remoteInUse(by: String)
 
         public var errorDescription: String? {
             switch self {
@@ -446,6 +471,10 @@ public actor ConnectionManager {
             case .stillMounted(let path):
                 return "\(path) could not be disconnected, so the remote was not "
                      + "deleted. Nothing has been changed."
+            case .remoteInUse(let other):
+                return "Disconnect \(other) first. It is a connection to the same remote, "
+                     + "and deleting the remote would leave that volume with nothing to "
+                     + "reconnect to and delete the files it is serving from."
             }
         }
     }
@@ -515,6 +544,17 @@ public actor ConnectionManager {
     public func deleteRemote(_ connection: Connection,
                              configPath: String,
                              force: Bool = false) async throws -> DeletionOutcome {
+        // Before touching the daemon: is another connection to this remote mounted?
+        // Only this connection's own mount is brought down below; a sibling's would
+        // stay up on a remote that no longer exists in the configuration, and the
+        // cache purge at the end would take its files — the subpath cache sits
+        // inside the remote's (#114).
+        if let sibling = active.values.first(where: {
+            $0.connection.id != connection.id && $0.connection.remote == connection.remote
+        }) {
+            throw DeletionRefusal.remoteInUse(by: sibling.connection.displayName)
+        }
+
         let client = try await supervisor.requireClient()
 
         // Fail before touching anything if the remote is not there. This also avoids

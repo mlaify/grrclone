@@ -270,6 +270,83 @@ final class RemoteDeletionTests: XCTestCase {
                        "and therefore the same cache, which a UUID check would miss")
     }
 
+    // MARK: - Nested caches (#114)
+
+    /// rclone caches `dav1:photos` *inside* `dav1:`'s directory, so the two
+    /// overlap; `dav1:x` and `dav1:xy` merely look alike and do not.
+    func testCacheOverlapIsComponentWise() {
+        XCTAssertTrue(VFSCache.cachesOverlap("dav1:", "dav1:photos"), "the folder is inside the remote's cache")
+        XCTAssertTrue(VFSCache.cachesOverlap("dav1:photos", "dav1:"), "and the other way round")
+        XCTAssertTrue(VFSCache.cachesOverlap("dav1:photos", "dav1:photos/2024"))
+        XCTAssertTrue(VFSCache.cachesOverlap("dav1:photos", "dav1:photos"), "the same cache overlaps itself")
+        XCTAssertFalse(VFSCache.cachesOverlap("dav1:photos", "dav1:documents"))
+        XCTAssertFalse(VFSCache.cachesOverlap("dav1:x", "dav1:xy"), "a name prefix is not a path prefix")
+        XCTAssertFalse(VFSCache.cachesOverlap("dav1:", "box:"))
+    }
+
+    private func idleManager() -> ConnectionManager {
+        let supervisor = DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"),
+                                          runtimeDirectory: dir)
+        return ConnectionManager(supervisor: supervisor,
+                                 registry: MountRegistry(fileURL: dir.appendingPathComponent("mounts.json")))
+    }
+
+    /// The observed hole: a disconnected whole-remote connection clearing the cache
+    /// a mounted folder of the same remote is serving from. Refused, naming the
+    /// connection that has to be disconnected first — before the daemon is asked
+    /// for anything, which the idle supervisor here would refuse.
+    func testClearingAWholeRemoteCacheIsRefusedWhileAFolderOfItIsMounted() async {
+        let manager = idleManager()
+        let folder = Connection(remote: "dav1", path: "photos", displayName: "Photos")
+        await manager.adoptActiveMountForTesting(.init(connection: folder, serverID: "s1",
+                                                      mountPoint: dir.appendingPathComponent("Photos")))
+        let whole = Connection(remote: "dav1", displayName: "Cloud")
+
+        do {
+            try await manager.clearCache(for: whole)
+            XCTFail("must refuse: the folder's cache is inside this one")
+        } catch let refusal as ConnectionManager.CacheRefusal {
+            XCTAssertEqual(refusal, .cacheInUse(by: "Photos"))
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
+
+    /// The same connection's own mount is still reported as "disconnect this one".
+    func testClearingOnesOwnMountedCacheIsStillMounted() async {
+        let manager = idleManager()
+        let whole = Connection(remote: "dav1", displayName: "Cloud")
+        await manager.adoptActiveMountForTesting(.init(connection: whole, serverID: "s1",
+                                                      mountPoint: dir.appendingPathComponent("Cloud")))
+        do {
+            try await manager.clearCache(for: whole)
+            XCTFail("must refuse")
+        } catch let refusal as ConnectionManager.CacheRefusal {
+            XCTAssertEqual(refusal, .stillMounted)
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
+
+    /// Deleting a remote while another connection to it is mounted would leave
+    /// that volume with no configuration to reconnect to and purge its cache.
+    func testDeletingARemoteIsRefusedWhileASiblingIsMounted() async {
+        let manager = idleManager()
+        let folder = Connection(remote: "dav1", path: "photos", displayName: "Photos")
+        await manager.adoptActiveMountForTesting(.init(connection: folder, serverID: "s1",
+                                                      mountPoint: dir.appendingPathComponent("Photos")))
+        let whole = Connection(remote: "dav1", displayName: "Cloud")
+
+        do {
+            _ = try await manager.deleteRemote(whole, configPath: dir.appendingPathComponent("rclone.conf").path)
+            XCTFail("must refuse before touching the daemon")
+        } catch let refusal as ConnectionManager.DeletionRefusal {
+            XCTAssertEqual(refusal, .remoteInUse(by: "Photos"))
+        } catch {
+            XCTFail("wrong error — the sibling check must come before the daemon is needed: \(error)")
+        }
+    }
+
     /// A differing subpath means a different cache, so they do not interfere.
     func testDifferentSubpathsDoNotShareACache() {
         let a = Connection(remote: "dav1", path: "photos")
