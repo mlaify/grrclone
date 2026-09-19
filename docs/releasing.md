@@ -22,6 +22,13 @@ A pre-release suffix belongs to the tag alone: `v0.2.0-rc1` and `v0.2.0` both ex
 workflow refuses anything else rather than interpolating a free-text field into a git
 ref or a shell command.
 
+**Launch a dispatch from the tag, not from a branch.** GitHub offers tags in the same
+"Use workflow from" dropdown as branches. The build honours the tag you type into the
+input, but the provenance attestation takes its source commit from the *event* — so a
+rebuild of v0.1.0 started from `main` would publish v0.1.0's DMG carrying provenance
+naming `main`'s HEAD. That attestation would be cryptographically valid and factually
+wrong, which is worse than none, so the workflow refuses when the two disagree.
+
 ## One-time setup
 
 The workflow needs six secrets in a repository **environment named `release`**, not in
@@ -73,6 +80,30 @@ after an unverified `.p12` reached a repository secret and failed a release.
 - **The final check applies a quarantine attribute before asking `spctl`.** Assessing a
   local file can pass something a real download would not; this is what caught an
   unsigned disk image that notarisation alone had made look fine.
+
+## Build provenance
+
+Every release carries a [Sigstore](https://www.sigstore.dev)-signed provenance
+statement, logged publicly to Rekor, binding the DMG's SHA-256 to the repository,
+commit, workflow and runner that produced it. Anyone can check it without trusting
+us or this document:
+
+```bash
+gh attestation verify grrclone.dmg --repo mlaify/grrclone
+```
+
+It answers a different question from notarisation, and neither replaces the other.
+Notarisation says Apple scanned a build signed by our Developer ID; provenance says
+*which commit and which workflow* produced that exact file. A stolen signing
+certificate defeats the first and not the second.
+
+The step runs before the publish step and against the same file it uploads, so the
+digest attested is by construction the digest released. Attesting afterwards would
+leave a window in which the two could differ.
+
+It needs `id-token: write` (for the OIDC token Sigstore signs with) and
+`attestations: write` on the workflow. Both are at the top of `release.yml`; the job
+is already restricted to tag pushes.
 
 ## Verifying a published release
 

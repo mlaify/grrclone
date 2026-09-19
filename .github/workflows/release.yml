@@ -15,7 +15,9 @@ on:
         required: true
 
 permissions:
-  contents: write   # to create the release and upload the DMG
+  contents: write       # to create the release and upload the DMG
+  id-token: write       # to get the OIDC token Sigstore signs the attestation with
+  attestations: write   # to record the provenance against this repository
 
 jobs:
   release:
@@ -55,6 +57,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.TAG }}
+
+      # The attestation's source commit comes from the *event*, not from what we
+      # checked out, and nothing keeps the two in step.
+      #
+      # On a tag push they always agree. On `workflow_dispatch` they need not:
+      # checkout honours the tag typed into the input, while GITHUB_SHA stays on
+      # whichever ref the run was launched from. Rebuilding v0.1.0 from a dispatch
+      # started on main would therefore publish v0.1.0's DMG carrying provenance
+      # that names main's HEAD — an attestation that is cryptographically valid and
+      # factually wrong, which is worse than none at all.
+      #
+      # Rather than try to override the action's notion of the source, refuse the
+      # mismatch. Dispatching still works; it has to be launched *from the tag*,
+      # which GitHub's UI offers in the same dropdown as a branch.
+      - name: Refuse to attest a commit we did not build
+        env:
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BUILT_SHA="$(git rev-parse HEAD)"
+          if [ "$BUILT_SHA" != "$EVENT_SHA" ]; then
+            echo "::error::checked out $TAG ($BUILT_SHA) but this run's context is" \
+                 "$EVENT_SHA, so the provenance attestation would name the wrong" \
+                 "commit. Re-run the workflow with $TAG selected as the ref."
+            exit 1
+          fi
 
       # A tag is just a label; nothing else ties it to what the app reports as its
       # version. Without this, tagging v0.2.0 publishes a release whose About box,
@@ -170,6 +198,26 @@ jobs:
           xattr -w com.apple.quarantine "0083;00000000;Safari;" /tmp/dl.dmg
           spctl -a -vvv -t open --context context:primary-signature /tmp/dl.dmg
           xcrun stapler validate /tmp/dl.dmg
+
+      # Provenance, recorded in a public transparency log.
+      #
+      # Produces a Sigstore-signed in-toto SLSA statement binding this exact DMG's
+      # SHA-256 to the repository, commit, workflow and runner that produced it, and
+      # logs it to Rekor. Anyone can check it without trusting us:
+      #
+      #     gh attestation verify grrclone.dmg --repo mlaify/grrclone
+      #
+      # This is not a substitute for notarisation, which is what Gatekeeper enforces.
+      # It answers a different question: notarisation says Apple scanned a build
+      # signed by our Developer ID, this says which commit and workflow built it.
+      #
+      # Runs *before* publishing, against the same file the publish step uploads, so
+      # the digest attested is by construction the digest released. Attesting after
+      # publication would leave a window in which the two could differ.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: build/grrclone.dmg
 
       - name: Publish the release
         env:

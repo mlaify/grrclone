@@ -186,6 +186,9 @@ survive it, because they land in a local cache first.
   display time, where a future caller could forget.
 - The bundled rclone is pinned and checksummed at build time, never downloaded at
   runtime.
+- Every release carries a Sigstore-signed provenance attestation in a public
+  transparency log, so you can check which commit and workflow built the exact file
+  you downloaded: `gh attestation verify grrclone.dmg --repo mlaify/grrclone`.
 
 grrclone **reads** your `rclone.conf` but never writes it, so your command-line setup
 keeps working exactly as before. A CI check fails the build if any of this regresses.
