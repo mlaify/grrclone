@@ -31,6 +31,25 @@ public enum InstanceWait {
     /// by the test that compares this against the real unmount budget.
     static let uploadDrainAllowance: TimeInterval = 120
 
+    /// The wait when the other copy is the *same* bundle.
+    ///
+    /// There is no external signal that a macOS app is mid-`terminateLater`, so the
+    /// only evidence available is where the other copy lives. A copy at a different
+    /// path is the upgrade case the guard was written for — a new version dragged
+    /// into /Applications while the old one quits — and deserves the full deadline.
+    /// A copy at the *same* path is almost always one that is simply running: Launch
+    /// Services normally activates a running app rather than starting a second
+    /// process, so reaching this at all means something unusual, and the first draft
+    /// made that person wait six and a half minutes before being told the app was
+    /// already open. A few seconds covers a copy that is genuinely on its way out;
+    /// after that, activate it and say so, as before.
+    public static let samePathDeadline: TimeInterval = 5
+
+    /// The deadline that applies, given where the other copy is.
+    public static func deadline(samePath: Bool) -> TimeInterval {
+        samePath ? samePathDeadline : deadline
+    }
+
     /// How often to look. Frequent enough that a quick exit is not made to feel
     /// slow, rare enough to be free.
     public static let pollInterval: TimeInterval = 0.25
@@ -44,9 +63,10 @@ public enum InstanceWait {
     /// - Parameters:
     ///   - isTerminated: whether the other instance has exited.
     ///   - elapsed: seconds spent waiting so far.
-    public static func shouldKeepWaiting(isTerminated: Bool, elapsed: TimeInterval) -> Bool {
+    public static func shouldKeepWaiting(isTerminated: Bool, elapsed: TimeInterval,
+                                         samePath: Bool = false) -> Bool {
         guard !isTerminated else { return false }
-        return elapsed < deadline
+        return elapsed < deadline(samePath: samePath)
     }
 
     /// The outcome of waiting, for the caller to act on.

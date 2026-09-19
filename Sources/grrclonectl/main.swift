@@ -131,7 +131,10 @@ do {
         let foreign = await manager.foreignLookalikes()
         print("\nLoopback NFS mounts grrclone does NOT own (\(foreign.count)):")
         if foreign.isEmpty { print("  none") }
-        for path in foreign { print("  \(path)   <- left alone, not ours") }
+        for mount in foreign {
+            let times = mount.count > 1 ? " (mounted \(mount.count) times over)" : ""
+            print("  \(mount.path)\(times)   <- left alone, not ours")
+        }
 
     case "connect":
         guard arguments.count >= 2 else { usage() }

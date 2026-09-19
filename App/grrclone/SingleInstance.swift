@@ -39,7 +39,14 @@ enum SingleInstance {
         // version being broken.
         //
         // Bounded, because an instance wedged forever must not wedge the launch too.
-        if waitForExit(of: existing) == .clear { return true }
+        // How long to wait depends on where the other copy is. A different bundle
+        // path is the upgrade case and gets the full teardown budget; the same path
+        // is almost certainly just a running app and gets a few seconds, so someone
+        // who double-clicked it is told it is open rather than left staring at
+        // nothing for minutes.
+        let samePath = existing.bundleURL?.standardizedFileURL
+            == Bundle.main.bundleURL.standardizedFileURL
+        if waitForExit(of: existing, samePath: samePath) == .clear { return true }
 
         // Hand the user back to the instance that already owns the mounts, so the
         // launch does something sensible rather than silently nothing.
@@ -54,10 +61,12 @@ enum SingleInstance {
     /// `applicationDidFinishLaunching` before anything touches the mount registry or
     /// the daemon pid file, and letting the app proceed concurrently is precisely
     /// what must not happen.
-    private static func waitForExit(of other: NSRunningApplication) -> InstanceWait.Outcome {
+    private static func waitForExit(of other: NSRunningApplication,
+                                    samePath: Bool) -> InstanceWait.Outcome {
         let started = Date()
         while InstanceWait.shouldKeepWaiting(isTerminated: other.isTerminated,
-                                             elapsed: Date().timeIntervalSince(started)) {
+                                             elapsed: Date().timeIntervalSince(started),
+                                             samePath: samePath) {
             // Keeps the run loop turning so `isTerminated` is actually updated —
             // `NSRunningApplication` refreshes through KVO on the main run loop, so a
             // bare `sleep` here would spin for the full deadline and then report the

@@ -75,6 +75,19 @@ final class MountPointDiagnosisTests: XCTestCase {
         XCTAssertEqual(InstanceWait.outcome(isTerminated: false), .occupied)
     }
 
+    /// A copy at the same path is almost always just a running app. Making that
+    /// person wait the full teardown budget before being told it is open was a
+    /// regression the first draft introduced.
+    func testTheSamePathWaitsOnlyBriefly() {
+        XCTAssertLessThanOrEqual(InstanceWait.deadline(samePath: true), 10,
+                                 "a double-click on a running app must not stall for minutes")
+        XCTAssertFalse(InstanceWait.shouldKeepWaiting(isTerminated: false, elapsed: 10,
+                                                      samePath: true))
+        XCTAssertTrue(InstanceWait.shouldKeepWaiting(isTerminated: false, elapsed: 10,
+                                                     samePath: false),
+                      "a different bundle is the upgrade case and still gets the full wait")
+    }
+
     /// The deadline has to cover a real teardown, or the fix does nothing in the
     /// exact case it was written for.
     func testTheDeadlineCoversAFullUploadDrain() {
