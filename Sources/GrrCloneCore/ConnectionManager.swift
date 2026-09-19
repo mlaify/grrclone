@@ -8,6 +8,12 @@ public actor ConnectionManager {
         public let connection: Connection
         public let serverID: String
         public let mountPoint: URL
+
+        public init(connection: Connection, serverID: String, mountPoint: URL) {
+            self.connection = connection
+            self.serverID = serverID
+            self.mountPoint = mountPoint
+        }
     }
 
     private let supervisor: DaemonSupervisor
@@ -775,7 +781,17 @@ public actor ConnectionManager {
     private func reconnect(_ mount: ActiveMount) async throws {
         let transport = transports[mount.connection.transport] ?? NFSTransport()
 
-        try? await transport.unmount(at: mount.mountPoint)
+        // If the unmount fails, stop here with everything as it was: the mount is
+        // still up and still ours, so it stays in `active` and in the registry.
+        //
+        // This was `try?`, and the lines below then forgot the registry entry and
+        // dropped the mount regardless. A wedged mount that would not come down —
+        // a dead server can do that — was thereby disowned: not reconciled at the
+        // next launch, listed in the menu as "Not managed by grrclone", and outside
+        // the one rule that authorises an unmount at all. `disconnect()` got this
+        // right and the two disagreed (#111).
+        try await transport.unmount(at: mount.mountPoint)
+
         if let client = try? await supervisor.requireClient() {
             try? await client.stopServer(id: mount.serverID)
         }
@@ -818,6 +834,13 @@ public actor ConnectionManager {
         var root = mountPoint.standardizedFileURL
         for _ in 0..<depth { root = root.deletingLastPathComponent() }
         return root
+    }
+
+    /// Test seam: register a mount as live without going through `connect()`, which
+    /// needs a running daemon. Lets `checkHealth` be exercised against a transport
+    /// that refuses to unmount, with nothing real behind it.
+    func adoptActiveMountForTesting(_ mount: ActiveMount) {
+        active[mount.connection.id] = mount
     }
 
     /// Paths in the mount table that look like ours but are not recorded as owned.
