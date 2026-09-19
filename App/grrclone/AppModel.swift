@@ -518,6 +518,38 @@ final class AppModel: ObservableObject {
         status = "Added \(name)"
     }
 
+    // MARK: - Cache
+
+    @Published private(set) var cacheUsage: [UUID: VFSCache.Usage] = [:]
+    @Published private(set) var measuringCache = false
+
+    var totalCacheBytes: Int64 { cacheUsage.values.reduce(0) { $0 + $1.bytes } }
+
+    /// Measure on demand rather than on a poll.
+    ///
+    /// Walking the cache touches every file in it, which for a 20 GB cache is tens of
+    /// thousands of `stat` calls. That is fine when someone opens the tab and asks;
+    /// it is not something to do every two seconds in the background.
+    func refreshCacheUsage() async {
+        guard let manager else { return }
+        measuringCache = true
+        defer { measuringCache = false }
+        let connections = rows.map(\.connection)
+        cacheUsage = await manager.cacheUsage(for: connections)
+    }
+
+    func clearCache(for connection: Connection) async {
+        guard let manager else { return }
+        do {
+            let freed = try await manager.clearCache(for: connection)
+            status = "Cleared \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file))"
+                   + " from \(connection.displayName)"
+            await refreshCacheUsage()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     // MARK: - Deleting a remote
 
     /// The remote the delete sheet is confirming, if it is open.

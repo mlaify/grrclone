@@ -183,4 +183,98 @@ final class RemoteDeletionTests: XCTestCase {
         XCTAssertThrowsError(
             try ConfigBackup.make(configPath: dir.appendingPathComponent("nope.conf").path))
     }
+    // MARK: - Cache usage (#84)
+
+    private func writeCachedFile(fs: String, path: String, bytes: Int) throws {
+        let file = VFSCache.dataDirectory(cacheRoot: cacheRoot, fsSpec: fs)
+            .appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data(repeating: 0x41, count: bytes).write(to: file)
+    }
+
+    func testUsageCountsDataAndMetadata() throws {
+        try writeCachedFile(fs: "dav1:", path: "a.bin", bytes: 4096)
+        try writeCachedFile(fs: "dav1:", path: "sub/b.bin", bytes: 4096)
+        try writeMeta(fs: "dav1:", path: "a.bin", dirty: false)
+
+        let usage = VFSCache.usage(cacheRoot: cacheRoot, fsSpec: "dav1:")
+
+        XCTAssertEqual(usage.fileCount, 3, "two cached files plus one metadata file")
+        XCTAssertGreaterThanOrEqual(usage.bytes, 8192)
+        XCTAssertTrue(usage.isSafeToPurge)
+    }
+
+    func testUsageOfAnEmptyCacheIsZeroAndSafe() {
+        let usage = VFSCache.usage(cacheRoot: cacheRoot, fsSpec: "dav1:")
+        XCTAssertEqual(usage.bytes, 0)
+        XCTAssertEqual(usage.fileCount, 0)
+        XCTAssertTrue(usage.isSafeToPurge, "nothing cached is nothing to lose")
+    }
+
+    /// The interlock. A dirty entry is the only copy of that file, so the cache it
+    /// sits in is not free disk space.
+    func testCacheWithAnUnsentFileIsNotSafeToPurge() throws {
+        try writeCachedFile(fs: "dav1:", path: "draft.txt", bytes: 128)
+        try writeMeta(fs: "dav1:", path: "draft.txt", dirty: true)
+
+        let usage = VFSCache.usage(cacheRoot: cacheRoot, fsSpec: "dav1:")
+
+        XCTAssertFalse(usage.isSafeToPurge)
+        XCTAssertEqual(usage.pending.dirtyFiles, ["draft.txt"])
+    }
+
+    /// Unknown is not permission here either.
+    func testCacheThatCannotBeReadIsNotSafeToPurge() throws {
+        try writeCachedFile(fs: "dav1:", path: "a.bin", bytes: 128)
+        let broken = VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: "dav1:")
+            .appendingPathComponent("a.bin")
+        try FileManager.default.createDirectory(at: broken.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: broken)
+
+        XCTAssertFalse(VFSCache.usage(cacheRoot: cacheRoot, fsSpec: "dav1:").isSafeToPurge)
+    }
+
+    /// Sparse files must be measured by what purging would actually reclaim.
+    ///
+    /// rclone preallocates for partial downloads, so a half-fetched 4 GB video has a
+    /// logical size of 4 GB and occupies far less. Reporting the logical size would
+    /// promise disk space that clearing the cache will not give back.
+    func testSparseFilesAreMeasuredByAllocatedSize() throws {
+        let file = VFSCache.dataDirectory(cacheRoot: cacheRoot, fsSpec: "dav1:")
+            .appendingPathComponent("sparse.bin")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: 1 << 30)   // a 1 GiB hole, nothing written
+        try handle.close()
+
+        let usage = VFSCache.usage(cacheRoot: cacheRoot, fsSpec: "dav1:")
+
+        XCTAssertLessThan(usage.bytes, 1 << 30,
+                          "a sparse file must not be reported at its logical size")
+    }
+    /// Two connections pointing at the same remote and folder share one cache,
+    /// because the cache directory is named from `fsSpec`. Clearing must be scoped
+    /// to that, not to a connection id.
+    func testTwoConnectionsWithTheSameFsSpecShareACacheDirectory() {
+        let a = Connection(remote: "dav1", path: "photos", displayName: "Photos")
+        let b = Connection(remote: "dav1", path: "photos", displayName: "Photos Again")
+
+        XCTAssertNotEqual(a.id, b.id, "different connections")
+        XCTAssertEqual(a.fsSpec, b.fsSpec, "but the same filesystem")
+        XCTAssertEqual(VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: a.fsSpec),
+                       VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: b.fsSpec),
+                       "and therefore the same cache, which a UUID check would miss")
+    }
+
+    /// A differing subpath means a different cache, so they do not interfere.
+    func testDifferentSubpathsDoNotShareACache() {
+        let a = Connection(remote: "dav1", path: "photos")
+        let b = Connection(remote: "dav1", path: "documents")
+        XCTAssertNotEqual(VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: a.fsSpec),
+                          VFSCache.metadataDirectory(cacheRoot: cacheRoot, fsSpec: b.fsSpec))
+    }
 }

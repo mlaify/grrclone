@@ -16,6 +16,15 @@ public actor ConnectionManager {
     private let transports: [TransportKind: any MountTransport]
     private var active: [UUID: ActiveMount] = [:]
 
+    /// Filesystems with a mount in progress.
+    ///
+    /// Keyed by `fsSpec`, not by connection id, and tracked separately from `active`
+    /// because `connect` records into `active` only *after* `serve/start` and the
+    /// mount have both returned. Between those points a connection is serving files
+    /// and appears in neither place, which is long enough for something else to
+    /// decide its cache is idle.
+    private var connecting: Set<String> = []
+
     public init(supervisor: DaemonSupervisor,
                 registry: MountRegistry,
                 cacheRoot: URL? = nil,
@@ -111,6 +120,10 @@ public actor ConnectionManager {
         }
 
         let client = try await supervisor.start()
+
+        connecting.insert(connection.fsSpec)
+        defer { connecting.remove(connection.fsSpec) }
+
         let root = mountRoot ?? Self.defaultMountRoot()
         let mountPoint = root.appendingPathComponent(connection.displayName, isDirectory: true)
 
@@ -289,6 +302,90 @@ public actor ConnectionManager {
             outcome.daemonLeftRunning = true
         }
         return outcome
+    }
+
+    // MARK: - Cache
+
+    public enum CacheRefusal: Error, LocalizedError {
+        case pendingUploads(files: [String])
+        case cacheUnreadable
+        case stillMounted
+
+        public var errorDescription: String? {
+            switch self {
+            case .pendingUploads(let files):
+                let sample = files.prefix(3).joined(separator: ", ")
+                let more = files.count > 3 ? ", and \(files.count - 3) more" : ""
+                return "\(files.count) file(s) have not finished uploading: "
+                     + "\(sample)\(more). The only copy of those is in this cache, so "
+                     + "grrclone will not clear it. Let the uploads finish and try again."
+            case .cacheUnreadable:
+                return "grrclone could not read this cache, so it cannot tell whether "
+                     + "anything is still waiting to upload. It will not clear a cache "
+                     + "it cannot account for."
+            case .stillMounted:
+                return "Disconnect this remote before clearing its cache. rclone is "
+                     + "serving files from it, and deleting them underneath a live "
+                     + "mount produces read errors in Finder. If another connection "
+                     + "points at the same remote and folder, they share one cache, "
+                     + "so that one has to be disconnected too."
+            }
+        }
+    }
+
+    /// Disk used by each connection's cache, and whether it can be reclaimed.
+    public func cacheUsage(for connections: [Connection]) async -> [UUID: VFSCache.Usage] {
+        guard let root = try? await rcloneCacheRoot() else {
+            // Unknown, not zero. Reporting zero would invite a purge of something we
+            // cannot see.
+            return Dictionary(uniqueKeysWithValues: connections.map {
+                ($0.id, VFSCache.Usage(pending: PendingUploads(inspectionFailed: true)))
+            })
+        }
+        var result: [UUID: VFSCache.Usage] = [:]
+        for connection in connections {
+            result[connection.id] = VFSCache.usage(cacheRoot: root, fsSpec: connection.fsSpec)
+        }
+        return result
+    }
+
+    /// Whether anything is serving this filesystem right now.
+    ///
+    /// By `fsSpec`, never by connection id. The cache directory is named from
+    /// `fsSpec`, so two stored connections pointing at the same remote and subpath
+    /// — the same remote added twice, or one connection duplicated to mount it
+    /// somewhere else — share one cache. Checking the id alone would let a
+    /// disconnected connection clear the cache its mounted twin is reading from.
+    ///
+    /// Includes mounts still being established, which are in neither `active` nor
+    /// the mount table yet.
+    func isServing(fsSpec: String) -> Bool {
+        active.values.contains { $0.connection.fsSpec == fsSpec } || connecting.contains(fsSpec)
+    }
+
+    /// Reclaim a connection's cache.
+    ///
+    /// Three refusals, and none of them is skippable — unlike deletion, where a user
+    /// who has been shown the list can choose to discard it. There is no equivalent
+    /// reason to force this: the point of clearing a cache is to free disk, and
+    /// losing an unsent file to free disk is never the trade anyone wanted.
+    ///
+    /// Refuses while mounted because rclone is serving from these files; deleting
+    /// them underneath a live mount produces read errors rather than a clean re-fetch.
+    @discardableResult
+    public func clearCache(for connection: Connection) async throws -> Int64 {
+        guard !isServing(fsSpec: connection.fsSpec) else { throw CacheRefusal.stillMounted }
+
+        let root = try await rcloneCacheRoot()
+        let usage = VFSCache.usage(cacheRoot: root, fsSpec: connection.fsSpec)
+
+        if usage.pending.inspectionFailed { throw CacheRefusal.cacheUnreadable }
+        guard usage.pending.dirtyFiles.isEmpty else {
+            throw CacheRefusal.pendingUploads(files: usage.pending.dirtyFiles)
+        }
+
+        try VFSCache.purge(cacheRoot: root, fsSpec: connection.fsSpec)
+        return usage.bytes
     }
 
     // MARK: - Deleting a remote
