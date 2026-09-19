@@ -130,13 +130,23 @@ public actor ConnectionManager {
             throw MountError.mountFailed("No transport available for \(connection.transport.rawValue)")
         }
 
+        let root = mountRoot ?? Self.defaultMountRoot()
+        let mountPoint = root.appendingPathComponent(connection.displayName, isDirectory: true)
+
+        // Before anything is started: is that path already another live mount of
+        // ours? Two connections with one display name resolve to one folder, and
+        // the second used to reach the registry, replace the first's ownership
+        // record, fail to mount, and forget the record on the way out (#112).
+        if let other = active.values.first(where: { $0.mountPoint.path == mountPoint.path }) {
+            throw MountError.mountPointUnavailable(
+                "\(mountPoint.path) is already in use by the connection "
+                + "\"\(other.connection.displayName)\". Give this one a different name.")
+        }
+
         let client = try await supervisor.start()
 
         connecting.insert(connection.fsSpec)
         defer { connecting.remove(connection.fsSpec) }
-
-        let root = mountRoot ?? Self.defaultMountRoot()
-        let mountPoint = root.appendingPathComponent(connection.displayName, isDirectory: true)
 
         let params = transport.serveParameters(for: connection, cacheRoot: cacheRoot)
         let server = try await client.startServer(params)
@@ -144,13 +154,22 @@ public actor ConnectionManager {
         // Record ownership *before* mounting. If we crash between the mount syscall
         // returning and this write, the registry would not list a mount we do own and
         // reconciliation would leave it stranded.
-        try await registry.record(MountRegistry.Entry(
-            connectionID: connection.id,
-            mountPoint: mountPoint.path,
-            transport: connection.transport.rawValue,
-            serverID: server.id,
-            port: server.port,
-            pid: ProcessInfo.processInfo.processIdentifier))
+        //
+        // A record that cannot be written — a conflict with another connection's, or
+        // a disk that refuses — must not leave the server it was for running with
+        // nothing that knows about it.
+        do {
+            try await registry.record(MountRegistry.Entry(
+                connectionID: connection.id,
+                mountPoint: mountPoint.path,
+                transport: connection.transport.rawValue,
+                serverID: server.id,
+                port: server.port,
+                pid: ProcessInfo.processInfo.processIdentifier))
+        } catch {
+            try? await client.stopServer(id: server.id)
+            throw error
+        }
 
         do {
             try await transport.mount(connection: connection, server: server, at: mountPoint)

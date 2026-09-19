@@ -10,10 +10,63 @@ public actor ConnectionStore {
     private let fileURL: URL
     private var connections: [Connection]
 
+    /// Set when the file exists but could not be read, with where it was moved.
+    ///
+    /// Not the same as an empty store, and the difference matters more here than
+    /// it looks. An earlier version read an undecodable file as `[]`; startup then
+    /// adopted every remote in rclone.conf as a fresh connection and persisted,
+    /// **overwriting the file it could not read**. Every saved mount name, subpath,
+    /// read-only flag and connect-at-login setting was gone, and nothing said so.
+    /// The realistic trigger is a schema change, not disk damage — one new
+    /// non-optional field on `Connection` and every existing record stops decoding
+    /// (#113). Same lesson as `MountRegistry.loadFailure`, applied here.
+    public struct LoadFailure: Sendable, Equatable {
+        public let reason: String
+        /// Where the unreadable file now sits, so a person can read it — it is JSON
+        /// — and restore what they had.
+        public let quarantinedAt: URL
+    }
+    private(set) public var loadFailure: LoadFailure?
+
     public init(fileURL: URL? = nil) {
         let url = fileURL ?? Self.defaultURL()
         self.fileURL = url
-        self.connections = (try? Self.load(from: url)) ?? []
+        do {
+            self.connections = try Self.load(from: url)
+        } catch {
+            self.connections = []
+            let aside = Self.quarantine(url)
+            self.loadFailure = LoadFailure(reason: error.localizedDescription, quarantinedAt: aside)
+        }
+    }
+
+    /// Move an unreadable store aside rather than overwrite it. The next write
+    /// starts from a known-empty file; the old one stays for a human to recover.
+    private static func quarantine(_ url: URL) -> URL {
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime]
+        let aside = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.lastPathComponent).unreadable-\(stamp.string(from: Date()))")
+        try? FileManager.default.moveItem(at: url, to: aside)
+        return aside
+    }
+
+    /// Why a save was refused.
+    public enum Conflict: Error, LocalizedError, Equatable {
+        /// The display name is the mount folder, and two connections must never
+        /// resolve to the same one: the second to connect would overwrite the
+        /// first's ownership record and, on the failure that follows, forget it
+        /// (#112).
+        case displayNameTaken(String, by: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .displayNameTaken(let name, let other):
+                return "The name \"\(name)\" is already used by the connection for "
+                     + "\(other). Each connection needs its own, because the name is "
+                     + "also its mount folder."
+            }
+        }
     }
 
     public static func defaultURL() -> URL {
@@ -31,6 +84,11 @@ public actor ConnectionStore {
     }
 
     public func upsert(_ connection: Connection) throws {
+        if let clash = connections.first(where: {
+            $0.id != connection.id && $0.displayName == connection.displayName
+        }) {
+            throw Conflict.displayNameTaken(connection.displayName, by: clash.remote)
+        }
         if let index = connections.firstIndex(where: { $0.id == connection.id }) {
             connections[index] = connection
         } else {

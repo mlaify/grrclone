@@ -110,6 +110,34 @@ final class UnmountVerificationTests: XCTestCase {
         }
     }
 
+    // MARK: - #112
+
+    /// A second connection whose folder is another live mount's is refused before
+    /// the daemon is even started — the supervisor here has no binary and would
+    /// throw `binaryNotFound` if reached, which is how the ordering is asserted.
+    func testConnectRefusesAPathAnotherLiveMountAlreadyUses() async throws {
+        let registry = MountRegistry(fileURL: dir.appendingPathComponent("mounts.json"))
+        let supervisor = DaemonSupervisor(binary: URL(fileURLWithPath: "/nonexistent/rclone"),
+                                          runtimeDirectory: dir)
+        let manager = ConnectionManager(supervisor: supervisor, registry: registry)
+
+        let first = Connection(remote: "dav1", displayName: "Cloud")
+        let point = dir.appendingPathComponent("Cloud")
+        await manager.adoptActiveMountForTesting(
+            ConnectionManager.ActiveMount(connection: first, serverID: "s1", mountPoint: point))
+
+        let second = Connection(remote: "box", displayName: "Cloud")
+        do {
+            _ = try await manager.connect(second, mountRoot: dir)
+            XCTFail("must refuse the shared folder")
+        } catch let error as MountError {
+            guard case .mountPointUnavailable(let why) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("already in use by the connection \"Cloud\""), why)
+        }
+        let live = await manager.activeMounts.map(\.connection.id)
+        XCTAssertEqual(live, [first.id], "the first connection's mount is untouched")
+    }
+
     // MARK: - #111
 
     /// A transport that will not let go.

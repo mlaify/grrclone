@@ -65,6 +65,36 @@ final class MountSafetyTests: XCTestCase {
         XCTAssertFalse(ownsTheirs, "A path grrclone never recorded must never be claimed")
     }
 
+    /// Two connections resolving to one path: the second must not take over the
+    /// first's record. The same connection re-recording its own path is a remount
+    /// and is fine (#112).
+    func testRecordRefusesToReplaceAnotherConnectionsPath() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grrclone-test-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let registry = MountRegistry(fileURL: url)
+        let first = UUID(), second = UUID()
+        let path = "/Users/x/Cloud"
+
+        try await registry.record(.init(connectionID: first, mountPoint: path, transport: "nfs",
+                                        serverID: "s1", port: 1, pid: 1))
+        do {
+            try await registry.record(.init(connectionID: second, mountPoint: path, transport: "nfs",
+                                            serverID: "s2", port: 2, pid: 1))
+            XCTFail("must refuse")
+        } catch let conflict as MountRegistry.Conflict {
+            XCTAssertEqual(conflict, .pathOwnedByAnotherConnection(path))
+        }
+        let owner = await registry.entry(forMountPoint: path)
+        XCTAssertEqual(owner?.connectionID, first, "the live mount's record must be untouched")
+
+        // Must not throw: the owner re-recording its own path is a remount.
+        try await registry.record(.init(connectionID: first, mountPoint: path, transport: "nfs",
+                                        serverID: "s3", port: 3, pid: 1))
+        let remounted = await registry.entry(forMountPoint: path)
+        XCTAssertEqual(remounted?.serverID, "s3", "the owner may re-record its own path")
+    }
+
     func testForgettingRevokesOwnership() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("grrclone-test-\(UUID().uuidString).json")
