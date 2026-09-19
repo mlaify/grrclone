@@ -18,6 +18,9 @@ thing was built the way it was, and what was tried and rejected — lives in
   fields start empty and change only if you type a new one; grrclone does not know
   your existing password and does not pretend to.
   ([#83](https://github.com/mlaify/grrclone/issues/83))
+- **Transfer progress in the menu** — what is uploading, how far along, how fast, and
+  how long is left, instead of only a count.
+  ([#81](https://github.com/mlaify/grrclone/issues/81))
 - **Mount one folder of a remote** instead of all of it, from the connection's page in
   Settings. Leave it empty for the whole remote.
   ([#82](https://github.com/mlaify/grrclone/issues/82))
