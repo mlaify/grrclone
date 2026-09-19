@@ -131,7 +131,10 @@ do {
         let foreign = await manager.foreignLookalikes()
         print("\nLoopback NFS mounts grrclone does NOT own (\(foreign.count)):")
         if foreign.isEmpty { print("  none") }
-        for path in foreign { print("  \(path)   <- left alone, not ours") }
+        for mount in foreign {
+            let times = mount.count > 1 ? " (mounted \(mount.count) times over)" : ""
+            print("  \(mount.path)\(times)   <- left alone, not ours")
+        }
 
     case "connect":
         guard arguments.count >= 2 else { usage() }
@@ -167,7 +170,7 @@ do {
         print("cleaned:      \(report.cleaned.isEmpty ? "none" : report.cleaned.joined(separator: ", "))")
         print("still stuck:  \(report.stillMounted.isEmpty ? "none" : report.stillMounted.joined(separator: ", "))")
         let foreign = await manager.foreignLookalikes()
-        print("not ours:     \(foreign.isEmpty ? "none" : foreign.joined(separator: ", "))")
+        print("not ours:     \(foreign.isEmpty ? "none" : foreign.map { $0.count > 1 ? "\($0.path) (mounted \($0.count) times)" : $0.path }.joined(separator: ", "))")
         await supervisor.stop()
 
     case "recovery-test":

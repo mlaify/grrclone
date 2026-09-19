@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import GrrCloneCore
 
 /// Ensures only one grrclone runs at a time.
 ///
@@ -28,11 +29,51 @@ enum SingleInstance {
 
         guard let existing = others.first else { return true }
 
+        // Wait for it, rather than giving up on it.
+        //
+        // The case this exists for is an upgrade, and an upgrade is exactly when the
+        // old copy is mid-teardown: `applicationShouldTerminate` returns
+        // `.terminateLater` and the quit path can run for minutes — draining
+        // uploads, unmounting, stopping the daemon. Refusing on sight meant the new
+        // copy silently terminated itself during that window, which reads as the new
+        // version being broken.
+        //
+        // Bounded, because an instance wedged forever must not wedge the launch too.
+        // How long to wait depends on where the other copy is. A different bundle
+        // path is the upgrade case and gets the full teardown budget; the same path
+        // is almost certainly just a running app and gets a few seconds, so someone
+        // who double-clicked it is told it is open rather than left staring at
+        // nothing for minutes.
+        let samePath = existing.bundleURL?.standardizedFileURL
+            == Bundle.main.bundleURL.standardizedFileURL
+        if waitForExit(of: existing, samePath: samePath) == .clear { return true }
+
         // Hand the user back to the instance that already owns the mounts, so the
         // launch does something sensible rather than silently nothing.
         existing.activate()
         notifyAlreadyRunning(existingPath: existing.bundleURL?.path)
         return false
+    }
+
+    /// Block until the other instance exits, or the deadline passes.
+    ///
+    /// Synchronous and on the main thread on purpose: this runs from
+    /// `applicationDidFinishLaunching` before anything touches the mount registry or
+    /// the daemon pid file, and letting the app proceed concurrently is precisely
+    /// what must not happen.
+    private static func waitForExit(of other: NSRunningApplication,
+                                    samePath: Bool) -> InstanceWait.Outcome {
+        let started = Date()
+        while InstanceWait.shouldKeepWaiting(isTerminated: other.isTerminated,
+                                             elapsed: Date().timeIntervalSince(started),
+                                             samePath: samePath) {
+            // Keeps the run loop turning so `isTerminated` is actually updated —
+            // `NSRunningApplication` refreshes through KVO on the main run loop, so a
+            // bare `sleep` here would spin for the full deadline and then report the
+            // instance as still running however long ago it exited.
+            RunLoop.current.run(until: Date().addingTimeInterval(InstanceWait.pollInterval))
+        }
+        return InstanceWait.outcome(isTerminated: other.isTerminated)
     }
 
     /// Bundle identifier matching misses the case that actually caused trouble here:
