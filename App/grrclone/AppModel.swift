@@ -196,6 +196,18 @@ final class AppModel: ObservableObject {
                 return
             }
 
+            // Said before anything is adopted, so the person knows why every
+            // connection is suddenly back at its defaults — and where the file with
+            // their settings went. Adoption still runs: an empty menu is not a
+            // better outcome than a working one with a warning on it, and the
+            // quarantined file makes the settings recoverable by hand.
+            if let failure = await store.loadFailure {
+                lastError = "grrclone could not read its list of connections "
+                          + "(\(failure.reason)). The file was moved to "
+                          + "\(failure.quarantinedAt.path) and your remotes have been "
+                          + "set up again with default settings."
+            }
+
             let remotes = try await client.listRemotes()
             _ = try? await store.adoptNewRemotes(remotes)
 
@@ -973,8 +985,14 @@ final class AppModel: ObservableObject {
         } ?? false
 
         Task {
-            try? await store.upsert(connection)
-            if wasMounted && mountAffecting { needsRemount.insert(connection.id) }
+            do {
+                try await store.upsert(connection)
+                if wasMounted && mountAffecting { needsRemount.insert(connection.id) }
+            } catch {
+                // A refused save has to be said, or the form shows a name the store
+                // did not take and the next connect fails on a path collision.
+                lastError = error.localizedDescription
+            }
             await refresh()
         }
     }

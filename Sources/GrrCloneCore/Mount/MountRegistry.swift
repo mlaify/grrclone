@@ -85,9 +85,31 @@ public actor MountRegistry {
 
     public var all: [Entry] { entries }
 
+    /// A record that would silently replace another connection's.
+    public enum Conflict: Error, LocalizedError, Equatable {
+        case pathOwnedByAnotherConnection(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .pathOwnedByAnotherConnection(let path):
+                return "\(path) is already recorded as mounted by another connection."
+            }
+        }
+    }
+
     /// Record intent to mount. Called *before* the mount so that a crash between the
     /// mount syscall and the write still leaves a recoverable record.
+    ///
+    /// The same connection may re-record its path — that is a remount. A *different*
+    /// connection may not: the first version replaced whatever was there, so a
+    /// second connection named like a mounted one took over the live mount's
+    /// ownership record, failed to mount, and its failure path forgot the record
+    /// entirely. The live mount was then nobody's (#112).
     public func record(_ entry: Entry) throws {
+        if let existing = entries.first(where: { $0.mountPoint == entry.mountPoint }),
+           existing.connectionID != entry.connectionID {
+            throw Conflict.pathOwnedByAnotherConnection(entry.mountPoint)
+        }
         entries.removeAll { $0.mountPoint == entry.mountPoint }
         entries.append(entry)
         try persist()

@@ -19,6 +19,16 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ### Fixed
 
+- Two connections can no longer share a name. The name is also the mount folder, and
+  connecting a second connection named like a mounted one used to take over the
+  first's ownership record and then forget it, leaving a live volume nothing would
+  disconnect. Settings now refuses the duplicate and says which connection has the
+  name. ([#112](https://github.com/mlaify/grrclone/issues/112))
+- A damaged list of connections is no longer silently replaced. It used to be read as
+  empty, after which every remote was set up again with default settings and the
+  file overwritten — every mount name, folder and read-only choice gone without a
+  word. The unreadable file is now moved aside and named in the menu, so it can be
+  restored. ([#113](https://github.com/mlaify/grrclone/issues/113))
 - Disconnecting now checks the list of mounted volumes afterwards rather than trusting
   the unmount command's exit status, which lies in both directions on a path with
   several volumes stacked on it. A layer removed with another still under it is
