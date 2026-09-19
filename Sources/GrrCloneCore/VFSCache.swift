@@ -48,6 +48,24 @@ public enum VFSCache {
         return path
     }
 
+    /// Whether two filesystems' caches are one inside the other, or the same.
+    ///
+    /// rclone's layout nests them: `dav1:` caches under `dav1`, and `dav1:photos`
+    /// under `dav1/photos` — *inside* it. So purging the whole-remote cache takes
+    /// the subpath's with it, and clearing the subpath's removes part of the
+    /// whole-remote's. Any check that asks "is anything serving from this cache"
+    /// has to ask about overlap, not equality; an exact match let a mounted
+    /// `dav1:photos` twin have its cache deleted from under it by a disconnected
+    /// `dav1:` (#114).
+    ///
+    /// Component-wise, so `dav1:x` and `dav1:xy` do not overlap.
+    public static func cachesOverlap(_ a: String, _ b: String) -> Bool {
+        let first = cacheSubpath(forFS: a).split(separator: "/")
+        let second = cacheSubpath(forFS: b).split(separator: "/")
+        let shorter = min(first.count, second.count)
+        return Array(first.prefix(shorter)) == Array(second.prefix(shorter))
+    }
+
     /// The JSON companions, one per cached file, that carry the `Dirty` flag.
     public static func metadataDirectory(cacheRoot: URL, fsSpec: String) -> URL {
         cacheRoot.appendingPathComponent("vfsMeta/\(cacheSubpath(forFS: fsSpec))")

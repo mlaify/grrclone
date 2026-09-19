@@ -70,15 +70,16 @@ private struct CacheRow: View {
     /// should act on them. Nil means it can.
     private var obstacle: String? {
         if row.state.isMounted { return "Disconnect it first" }
-        // A cache is named from `fsSpec`, so two connections pointing at the same
-        // remote and folder share one. Offering to clear this one while its twin is
-        // mounted would delete files rclone is reading from.
+        // A cache is named from `fsSpec`, and a folder's cache sits inside its
+        // remote's, so two connections can share a cache or nest one in the other.
+        // Offering to clear this one while such a twin is mounted would delete files
+        // rclone is reading from. Overlap, not equality — see `VFSCache.cachesOverlap`.
         if let twin = model.rows.first(where: {
             $0.id != row.id
-                && $0.connection.fsSpec == row.connection.fsSpec
+                && VFSCache.cachesOverlap($0.connection.fsSpec, row.connection.fsSpec)
                 && $0.state.isMounted
         }) {
-            return "Shared with \(twin.connection.displayName), which is connected"
+            return "Overlaps \(twin.connection.displayName), which is connected"
         }
         guard let usage else { return "Not measured yet" }
         if usage.pending.inspectionFailed { return "Could not be read" }

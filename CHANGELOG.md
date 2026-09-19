@@ -32,6 +32,13 @@ thing was built the way it was, and what was tried and rejected — lives in
 - A change to a connection that could not be saved no longer looks saved. The list
   in memory now changes only after the file on disk has, and a refused save is
   reported in the menu. ([#121](https://github.com/mlaify/grrclone/issues/121))
+- Clearing or deleting a connection to a whole remote no longer deletes the cache of
+  a connected folder of that same remote. rclone keeps a folder's cache inside the
+  remote's, and grrclone compared the two by name and saw no relation. Both actions
+  now refuse while an overlapping connection is mounted, and say which one. Deleting
+  a remote also removes the other connections that used it, which would otherwise
+  have stayed in the list pointing at nothing.
+  ([#114](https://github.com/mlaify/grrclone/issues/114))
 - Disconnecting now checks the list of mounted volumes afterwards rather than trusting
   the unmount command's exit status, which lies in both directions on a path with
   several volumes stacked on it. A layer removed with another still under it is
