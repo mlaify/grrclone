@@ -173,10 +173,17 @@ survive it, because they land in a local cache first.
 ## Privacy
 
 - No telemetry, no analytics, no crash reporting.
-- No update check unless you turn one on. When you do, grrclone asks GitHub which
-  releases exist and nothing else — no version, no machine details, no identifier —
-  and it never downloads or installs anything on its own.
+- No update check unless you turn one on. When you do, grrclone asks GitHub once a
+  day which releases exist and nothing else — no version, no machine details, no
+  identifier — and it never downloads or installs anything on its own. The link it
+  offers you is built from the repository name and the tag, never from GitHub's
+  reply, so a tampered response cannot point it somewhere else.
 - No accounts, no licence keys, no gated features.
+- **One permission, asked once.** If you turn on update checks, macOS asks whether
+  grrclone may notify you — so it can tell you a new version exists. That is the only
+  permission it ever requests, it is asked at the moment you opt in rather than at
+  first launch, and saying no costs you nothing but the notification: the check still
+  runs and the menu bar icon still marks an available update.
 - The only outbound connections are to the storage providers you configure.
 - The rclone control API is bound to a unix socket with `0600` permissions and random
   per-launch credentials. Nothing listens on the network, not even loopback. If the

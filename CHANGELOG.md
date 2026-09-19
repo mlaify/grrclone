@@ -13,6 +13,19 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ### Added
 
+- **grrclone now tells you when an update exists**, instead of waiting to be asked.
+  With update checks on it asks GitHub once a day rather than only at launch — a menu
+  bar app can run for weeks, so the old behaviour meant anyone who started it before a
+  release never heard about it. An available update marks the menu bar icon, and a
+  **Copy Command** button puts the upgrade command on your clipboard.
+- **One permission, asked once.** Turning on update checks asks macOS whether
+  grrclone may notify you. It is the only permission grrclone requests, it is asked
+  when you opt in rather than at first launch, and declining costs nothing else — the
+  check still runs and the icon still marks the update. The same version is never
+  announced twice.
+
+### Added
+
 - Releases now carry a **Sigstore-signed build provenance attestation**, logged to a
   public transparency log. Anyone can verify which commit and workflow produced a
   given download with `gh attestation verify grrclone.dmg --repo mlaify/grrclone` —

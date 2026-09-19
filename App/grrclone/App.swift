@@ -7,6 +7,17 @@ struct GrrCloneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @ObservedObject private var model = AppModel.shared
 
+    /// What the menu bar icon says without being opened.
+    ///
+    /// The icon is the only surface a user sees every day — the menu is shut most
+    /// of the time and Settings is opened once. So it is where an available update
+    /// has to appear, or the people who never think to check never find out.
+    private var iconName: String {
+        if model.pendingUploads > 0 { return "externaldrive.badge.timemachine" }
+        if model.availableUpdate != nil { return "externaldrive.badge.plus" }
+        return "externaldrive.badge.icloud"
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(model: model)
@@ -14,9 +25,10 @@ struct GrrCloneApp: App {
             // The icon carries state, because the menu is closed most of the time and a
             // pending upload is exactly the thing a user needs to notice before they
             // close the lid.
-            Image(systemName: model.pendingUploads > 0
-                  ? "externaldrive.badge.timemachine"
-                  : "externaldrive.badge.icloud")
+            // Pending uploads outrank an update: one is about to lose data if the
+            // lid closes, the other can wait a week. An update is marked only when
+            // nothing more urgent is competing for the same eight points of icon.
+            Image(systemName: iconName)
         }
         .menuBarExtraStyle(.window)
 

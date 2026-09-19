@@ -40,7 +40,20 @@ final class AppModel: ObservableObject {
     @Published var updateChecksEnabled: Bool = UserDefaults.standard.bool(forKey: "UpdateChecksEnabled") {
         didSet {
             UserDefaults.standard.set(updateChecksEnabled, forKey: "UpdateChecksEnabled")
-            if updateChecksEnabled { checkForUpdates() } else { availableUpdate = nil }
+            if updateChecksEnabled {
+                // Ask for the notification permission here and nowhere else. The
+                // user has just asked to be told about new versions, so being asked
+                // how is expected — unlike a prompt at first launch, before they
+                // have asked for anything, which is what trains people to refuse.
+                Task {
+                    notificationsAuthorised = await notifier.requestPermission()
+                }
+                startUpdateCheckTimer()
+                checkForUpdates()
+            } else {
+                stopUpdateCheckTimer()
+                availableUpdate = nil
+            }
         }
     }
     @Published var includePrereleases: Bool = UserDefaults.standard.bool(forKey: "UpdateIncludePrereleases") {
@@ -50,6 +63,25 @@ final class AppModel: ObservableObject {
         }
     }
     @Published private(set) var availableUpdate: AvailableUpdate?
+
+    /// Whether macOS will let us post a notification. Displayed so the Updates tab
+    /// can say what state the one permission is in rather than leaving the user to
+    /// check System Settings.
+    @Published private(set) var notificationsAuthorised = false
+
+    private let notifier = UpdateNotifier()
+    private var updateCheckTimer: Task<Void, Never>?
+    private static let lastNotifiedKey = "LastNotifiedVersion"
+
+    /// The newest version already announced, so the same one is not announced twice.
+    ///
+    /// Persisted: an app that runs for weeks and is occasionally restarted would
+    /// otherwise re-announce on every launch, which is the behaviour that teaches
+    /// people to ignore notifications.
+    private var lastNotifiedVersion: ReleaseVersion? {
+        get { UserDefaults.standard.string(forKey: Self.lastNotifiedKey).flatMap(ReleaseVersion.init) }
+        set { UserDefaults.standard.set(newValue?.description, forKey: Self.lastNotifiedKey) }
+    }
     @Published private(set) var lastUpdateCheck: Date?
     @Published private(set) var updateCheckInProgress = false
 
@@ -282,7 +314,11 @@ final class AppModel: ObservableObject {
 
         await connectLoginItems()
         await refreshConfigEncryptionState()
-        if updateChecksEnabled { checkForUpdates() }
+        if updateChecksEnabled {
+            startUpdateCheckTimer()
+            checkForUpdates()
+            Task { await refreshNotificationAuthorisation() }
+        }
         startWatchingForBreakage()
         startPollingActivity()
     }
@@ -694,13 +730,67 @@ final class AppModel: ObservableObject {
         Task {
             defer { updateCheckInProgress = false }
             do {
-                availableUpdate = try await UpdateChecker()
+                let found = try await UpdateChecker()
                     .check(current: current, includePrereleases: prereleases)
+                availableUpdate = found
                 lastUpdateCheck = Date()
+                if let found { await announceIfNew(found) }
             } catch {
                 lastError = error.localizedDescription
             }
         }
+    }
+
+    /// Check again once a day for as long as the app runs.
+    ///
+    /// The check used to happen only at launch, on the toggle, and on Check Now. A
+    /// menu bar app runs for weeks, so someone who launched before a release existed
+    /// would never hear about it — and the people most likely to be in that position
+    /// are exactly the ones who do not think to look.
+    private func startUpdateCheckTimer() {
+        stopUpdateCheckTimer()
+        updateCheckTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(UpdateNotice.checkInterval) * 1_000_000_000)
+                if Task.isCancelled { return }
+                guard let self else { return }
+                await MainActor.run { self.checkForUpdates() }
+            }
+        }
+    }
+
+    private func stopUpdateCheckTimer() {
+        updateCheckTimer?.cancel()
+        updateCheckTimer = nil
+    }
+
+    /// Announce an update once, if it is worth announcing.
+    private func announceIfNew(_ update: AvailableUpdate) async {
+        guard UpdateNotice.shouldNotify(about: update.version,
+                                        current: currentVersion,
+                                        lastNotified: lastNotifiedVersion) else { return }
+        await notifier.post(version: update.version,
+                            installation: installation,
+                            pageURL: update.pageURL)
+        lastNotifiedVersion = update.version
+    }
+
+    /// The exact command to upgrade, for the Copy button.
+    ///
+    /// Only `brew upgrade` — not `brew update` first. Homebrew auto-updates before
+    /// an upgrade unless `HOMEBREW_NO_AUTO_UPDATE` is set, so a second command
+    /// would be cargo cult, and every extra step is one more place to give up.
+    var upgradeCommand: String { "brew upgrade --cask grrclone" }
+
+    func copyUpgradeCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(upgradeCommand, forType: .string)
+        status = "Copied: \(upgradeCommand)"
+    }
+
+    /// Refresh the permission state without prompting, for the Updates tab.
+    func refreshNotificationAuthorisation() async {
+        notificationsAuthorised = await notifier.isAuthorised()
     }
 
     /// Open the release page. Deliberately not "install" — see `checkForUpdates`.
