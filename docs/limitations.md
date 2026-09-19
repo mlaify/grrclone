@@ -77,6 +77,42 @@ with no reboot. See [benchmarks.md](benchmarks.md).
 
 See [#42](https://github.com/mlaify/grrclone/issues/42).
 
+## A stacked, dead mount is hard to remove — and `umount -f` lies about it
+
+macOS lets a mount be placed on top of an existing mount at the same path. A retrying
+launchd agent, or repeated sessions of a tool that did not record what it mounted,
+can leave the same directory mounted three times over. Only the top layer is
+visible; the ones beneath still exist and still have to come off one at a time.
+
+This was observed with three grrclone-fingerprinted NFS mounts stacked on `~/Cloud`,
+none of them in grrclone's registry (they predate it). Two things make it worse than
+it sounds:
+
+**`diskutil umount force` refuses outright.** DiskArbitration does not handle stacked
+NFS well and reports `Unmount failed` without removing anything.
+
+**`umount -f` reports a timeout whether or not it worked.** With the server gone, the
+kernel waits for an UNMOUNT reply that never comes, then prints
+`Operation timed out`. Sometimes it has unmounted a layer regardless; sometimes it has
+not. The message is not evidence either way. **Count the layers after each attempt**
+rather than trusting the output:
+
+```bash
+mount | grep -cF '/Users/you/Cloud '   # note the trailing space
+```
+
+If the count will not go down, the kernel is holding a stale reference and a reboot
+clears it faster than anything else will. There is a cleverer route — start any NFS
+server on the dead port so the UNMOUNT RPC gets a reply — but it is fiddly enough that
+a reboot is the honest recommendation.
+
+grrclone will not remove these for you, because they are not in its registry and it
+cannot prove they are not yours. Since 0.7.1 the menu says how many layers are stacked
+and names the command, instead of counting the top layer's files and calling them
+"existing items". Offering a confirmed one-click cleanup for mounts that carry
+grrclone's own fingerprint is tracked as
+[#105](https://github.com/mlaify/grrclone/issues/105).
+
 ## Apple Silicon only
 
 grrclone is built `arm64` only, and the build asserts it. Intel Macs cannot run it.

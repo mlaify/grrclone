@@ -11,6 +11,11 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Documented
+
+- What to do about a mount that is stacked on top of a dead one, and why `umount -f`
+  saying "Operation timed out" does not mean it did nothing.
+
 ### Fixed
 
 - A freshly upgraded copy no longer quits itself when launched while the previous
