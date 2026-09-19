@@ -20,6 +20,10 @@ public enum MountHealth: Sendable {
         case unresponsive
         /// No longer in the mount table at all.
         case gone
+        /// The mount table could not be read, so nothing is known. Distinct from
+        /// `gone`: that one triggers a rebuild, and rebuilding on no evidence is how
+        /// a healthy mount gets torn down.
+        case unknown
     }
 
     /// Probe a mount point.
@@ -28,7 +32,9 @@ public enum MountHealth: Sendable {
     ///   below the NFS soft-mount timeout so the UI learns about trouble long before the
     ///   kernel gives up.
     public static func probe(_ mountPoint: URL, timeout: TimeInterval = 5) async -> Status {
-        guard await SystemMounts.isMounted(mountPoint.path) else { return .gone }
+        let table: [SystemMounts.MountEntry]
+        do { table = try await SystemMounts.current() } catch { return .unknown }
+        guard table.contains(where: { $0.mountPoint == mountPoint.path }) else { return .gone }
 
         // Look up a name that cannot exist. This is deliberate and load-bearing.
         //

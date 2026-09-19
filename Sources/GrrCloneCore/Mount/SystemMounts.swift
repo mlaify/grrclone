@@ -12,6 +12,27 @@ import Darwin
 /// `~/My Files on Cloud` does. A unit test caught exactly that case truncating a path to
 /// `Cloud`, which would have made grrclone fail to recognise a mount it owns.
 public enum SystemMounts {
+    /// The kernel would not say what is mounted.
+    ///
+    /// Its own error, because the callers that matter must be able to tell this
+    /// apart from an empty table — and there is no such thing as an empty table on a
+    /// running system, `/` is always in it. `getmntinfo` returns 0 only on failure
+    /// (ENOMEM), and an earlier version of `current()` returned `[]` for that, which
+    /// `reconcileOrphans` read as "none of our mounts are mounted": it forgot every
+    /// registry entry and reported a clean sweep, which is what authorises killing an
+    /// orphaned daemon under live mounts (#115).
+    public enum MountTableError: Error, LocalizedError {
+        case unreadable
+
+        public var errorDescription: String? {
+            "The mount table could not be read, so grrclone cannot tell what is mounted."
+        }
+    }
+
+    /// Something that reads the mount table. `current` is the real one; tests inject
+    /// one that throws, because `getmntinfo` cannot be made to fail on demand.
+    public typealias Reader = @Sendable () async throws -> [MountEntry]
+
     public struct MountEntry: Sendable, Equatable {
         public let source: String
         public let mountPoint: String
@@ -40,7 +61,8 @@ public enum SystemMounts {
     public static func current() async throws -> [MountEntry] {
         var buffer: UnsafeMutablePointer<statfs>?
         let count = getmntinfo(&buffer, MNT_NOWAIT)
-        guard count > 0, let buffer else { return [] }
+        // Zero is an error, never an answer: `/` is always mounted.
+        guard count > 0, let buffer else { throw MountTableError.unreadable }
 
         return (0..<Int(count)).map { index in
             var entry = buffer[index]
@@ -51,6 +73,9 @@ public enum SystemMounts {
         }
     }
 
+    /// Diagnostics only. An unreadable table answers `false` here, which is the wrong
+    /// answer for anything that decides whether to unmount, mount or kill — those
+    /// paths call `current()` and treat a throw as "unknown".
     public static func isMounted(_ path: String) async -> Bool {
         guard let entries = try? await current() else { return false }
         return entries.contains { $0.mountPoint == path }

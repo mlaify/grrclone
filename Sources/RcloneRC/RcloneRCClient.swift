@@ -88,6 +88,11 @@ public actor RcloneRCClient {
         public let id: String
         public let addr: String
 
+        public init(id: String, addr: String) {
+            self.id = id
+            self.addr = addr
+        }
+
         /// The port rclone actually bound. `addr` arrives as `127.0.0.1:64899` or
         /// `[::]:64899`, so take the last colon-separated field.
         public var port: Int? {
