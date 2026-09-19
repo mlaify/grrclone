@@ -581,10 +581,34 @@ private struct UpdatesTab: View {
                 Toggle("Include pre-releases", isOn: $model.includePrereleases)
                     .disabled(!model.updateChecksEnabled)
             } footer: {
-                Text("Asks GitHub what versions exist. Sends nothing about you, "
-                     + "and never installs anything by itself.")
+                Text("Asks GitHub once a day what versions exist. Sends nothing "
+                     + "about you, and never installs anything by itself.")
                 .font(.caption).foregroundStyle(.secondary)
             }
+
+            // The app's one permission, stated rather than buried.
+            Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.notificationsAuthorised
+                             ? "grrclone will notify you when an update is available"
+                             : "Notifications are off")
+                        .font(.caption.weight(.medium))
+                        Text(model.notificationsAuthorised
+                             ? "This is the only permission grrclone asks for."
+                             : "grrclone asks for one permission, and only this one: "
+                               + "to notify you about an update it finds on GitHub. "
+                               + "Turn it on in System Settings › Notifications.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                } icon: {
+                    Image(systemName: model.notificationsAuthorised
+                          ? "bell.badge" : "bell.slash")
+                    .foregroundStyle(model.notificationsAuthorised ? .green : .secondary)
+                }
+            }
+            .task { await model.refreshNotificationAuthorisation() }
 
             if model.includePrereleases && isHomebrew {
                 Section {
@@ -623,6 +647,17 @@ private struct UpdatesTab: View {
                     Spacer()
 
                     if model.availableUpdate != nil {
+                        // Only for a Homebrew install: a direct-download user has
+                        // no brew command to run, and offering one would send them
+                        // somewhere that does not apply to them.
+                        if isHomebrew {
+                            Button("Copy Command") { model.copyUpgradeCommand() }
+                                .help(model.upgradeCommand)
+                        }
+                        // The URL is composed locally from the repository and tag
+                        // and never taken from GitHub's reply, so a tampered
+                        // response can at worst name a tag that 404s — it cannot
+                        // redirect this button somewhere else.
                         Button("Release Notes") { model.openReleasePage() }
                     }
                     // Disabled rather than silently doing nothing. The gate now

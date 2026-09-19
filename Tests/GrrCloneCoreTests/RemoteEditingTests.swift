@@ -60,6 +60,20 @@ final class RemoteEditingTests: XCTestCase {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
+    /// Reveal an obscured value, with flag parsing terminated first.
+    ///
+    /// Always through this, never by calling the raw helper with a bare "reveal".
+    /// `rclone obscure` emits a random string and roughly one in thirty begins with
+    /// a dash, which the CLI then parses as a flag: "unknown shorthand flag: 'H'".
+    /// That made these tests fail intermittently, and because the draw is random it
+    /// passed locally and failed in CI on the same commit.
+    ///
+    /// The third call site bitten by this. Two were patched individually before it
+    /// was clear the right answer is one helper that cannot be called wrongly.
+    private func reveal(_ binary: URL, _ value: String) throws -> String {
+        try rclone(binary, ["reveal", "--", value], withConfig: false)
+    }
+
     /// The value actually written to the file, not what any command reports.
     private func storedValue(_ key: String) throws -> String? {
         let text = try String(contentsOf: config, encoding: .utf8)
@@ -84,7 +98,7 @@ final class RemoteEditingTests: XCTestCase {
         let stored = try XCTUnwrap(storedValue("pass"))
         XCTAssertNotEqual(stored, "alice-secret", "the secret must not sit in the clear")
 
-        let revealed = try rclone(binary, ["reveal", stored], withConfig: false)
+        let revealed = try reveal(binary, stored)
         XCTAssertEqual(revealed, "alice-secret",
                        "and it must be trivially reversible — which is why it is not "
                        + "safe to show in a password field")
@@ -115,7 +129,7 @@ final class RemoteEditingTests: XCTestCase {
 
         let stored = try XCTUnwrap(storedValue("pass"))
         XCTAssertNotEqual(stored, "brand-new-password")
-        XCTAssertEqual(try rclone(binary, ["reveal", stored], withConfig: false),
+        XCTAssertEqual(try reveal(binary, stored),
                        "brand-new-password")
     }
 
@@ -145,7 +159,7 @@ final class RemoteEditingTests: XCTestCase {
                             "--", "pass", looksObscured])
 
         let stored = try XCTUnwrap(storedValue("pass"))
-        let revealed = try rclone(binary, ["reveal", stored], withConfig: false)
+        let revealed = try reveal(binary, stored)
         XCTAssertEqual(revealed, "hunter2",
                        "documents the misfire: rclone revealed a literal password "
                        + "instead of obscuring it. If this ever fails, rclone has "
@@ -164,7 +178,7 @@ final class RemoteEditingTests: XCTestCase {
                             "--", "pass", looksObscured])
 
         let stored = try XCTUnwrap(storedValue("pass"))
-        XCTAssertEqual(try rclone(binary, ["reveal", stored], withConfig: false),
+        XCTAssertEqual(try reveal(binary, stored),
                        looksObscured,
                        "with obscure forced, the literal string the user typed is what "
                        + "comes back")
