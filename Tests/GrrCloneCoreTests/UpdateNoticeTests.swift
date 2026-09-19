@@ -68,11 +68,17 @@ final class UpdateNoticeTests: XCTestCase {
 
     /// "An update is available" leaves the reader to work out how, and for a
     /// Homebrew install the answer is a command they will not guess.
-    func testHomebrewIsToldTheCommand() {
+    /// The command refreshes the tap explicitly.
+    ///
+    /// This test previously asserted the opposite, on the reasoning that `brew
+    /// upgrade` refreshes metadata by itself. It does — but only once per
+    /// `HOMEBREW_AUTO_UPDATE_SECS`, 24 hours by default. grrclone checks daily, so
+    /// the common case is someone who used brew earlier the same day: they run the
+    /// command, brew reports everything up to date against a stale tap, and this
+    /// app looks wrong about the one thing it was trying to help with.
+    func testHomebrewIsToldToRefreshTheTapFirst() {
         let text = UpdateNotice.body(for: v("0.7.0"), installation: .homebrew)
-        XCTAssertTrue(text.contains("brew upgrade --cask grrclone"), text)
-        XCTAssertFalse(text.contains("brew update"),
-                       "brew upgrade auto-updates first; a second command is cargo cult")
+        XCTAssertTrue(text.contains("brew update && brew upgrade --cask grrclone"), text)
     }
 
     func testADirectInstallIsNotToldToRunBrew() {
