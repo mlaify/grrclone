@@ -165,6 +165,66 @@ final class DaemonLogBufferTests: XCTestCase {
         XCTAssertFalse(line.contains("fe5f80f77d5fa3"), line)
     }
 
+    /// The rc API's own trace, captured verbatim from rclone 1.75.1 at DEBUG after
+    /// driving `config/create`, `config/update` and `config/unlock` over the socket.
+    ///
+    /// These lines are what the review found leaking (#109): `pass:` is not a word
+    /// any earlier pattern names, and Go's `map[k:v]` form is not one any earlier
+    /// pattern parses, so the wizard's password reached the log in clear text. The
+    /// `configPassword:` line was already redacted — only because "configPassword"
+    /// happens to contain "password", which is luck rather than design.
+    func testRedactsTheRcParameterTraceRcloneActuallyEmits() {
+        let create = "2026/09/19 16:28:59 DEBUG : rc: \"config/create\": with parameters map[name:w opt:map[nonInteractive:true obscure:true] parameters:map[pass:hunter2-plain url:https://x.example user:u] type:webdav]"
+        let update = "2026/09/19 16:28:59 DEBUG : rc: \"config/update\": with parameters map[name:w opt:map[nonInteractive:true obscure:true] parameters:map[pass:hunter2-updated]]"
+        let unlock = "2026/09/19 16:28:59 DEBUG : rc: \"config/unlock\": with parameters map[configPassword:secretpw-unlock]"
+
+        for (line, secret) in [(create, "hunter2-plain"), (update, "hunter2-updated"),
+                               (unlock, "secretpw-unlock")] {
+            let out = DaemonLog.redact(line)
+            XCTAssertFalse(out.contains(secret), "leaked \(secret): \(out)")
+            XCTAssertTrue(out.contains("rc: \"config/"), "the method name is the diagnosis: \(out)")
+        }
+    }
+
+    /// Replies carry the stored config back, obscured — one `rclone reveal` from
+    /// plaintext — so they are payload too. The error at the end of a reply line is
+    /// the one part worth keeping, and it is kept.
+    func testRedactsConfigRepliesButKeepsTheMethod() {
+        let dump = "DEBUG : rc: \"config/dump\": reply map[dav1:map[pass:AbCdEfObscured type:webdav url:https://dav.example]]: <nil>"
+        let out = DaemonLog.redact(dump)
+        XCTAssertFalse(out.contains("AbCdEfObscured"), out)
+        XCTAssertTrue(out.hasSuffix("rc: \"config/dump\": reply ***"), out)
+    }
+
+    /// A non-config call whose parameters block carries a secret — `serve/start`
+    /// for a WebDAV server with `user`/`pass`, or a backend command — is redacted
+    /// from the parameters block onward and no earlier, so the method and the
+    /// leading arguments survive.
+    func testRedactsParametersBlocksOnOtherRcCalls() {
+        let line = "DEBUG : rc: \"backend/command\": with parameters map[command:x fs:s3: parameters:map[secret_access_key:wJalrXUtnFEMI]]"
+        let out = DaemonLog.redact(line)
+        XCTAssertFalse(out.contains("wJalrXUtnFEMI"), out)
+        XCTAssertTrue(out.contains("fs:s3:"), "leading arguments are diagnostic: \(out)")
+    }
+
+    /// `serve/start` and `vfs/stats` carry no credentials and are the lines someone
+    /// reads to see why a mount failed. They must come through untouched.
+    func testLeavesCredentialFreeRcCallsAlone() {
+        let line = "DEBUG : rc: \"serve/start\": with parameters map[addr:localhost:0 fs:dav1: type:nfs vfs_cache_mode:full]"
+        XCTAssertEqual(DaemonLog.redact(line), line)
+        let stats = "DEBUG : rc: \"vfs/stats\": reply map[diskCache:map[uploadsQueued:0]]: <nil>"
+        XCTAssertEqual(DaemonLog.redact(stats), stats)
+    }
+
+    /// The short backend keys are word-bounded: `keychain:` and `bypass:` are not
+    /// secrets, `key:` and `pass:` are.
+    func testShortSecretKeysAreWordBounded() {
+        XCTAssertFalse(DaemonLog.redact("sftp: key=PRIVATEKEYDATA").contains("PRIVATEKEYDATA"))
+        XCTAssertFalse(DaemonLog.redact("pass: p4ssw0rd").contains("p4ssw0rd"))
+        let ordinary = "NOTICE : keychain: item found, bypass: false"
+        XCTAssertEqual(DaemonLog.redact(ordinary), ordinary)
+    }
+
     /// Over-redaction has a cost too: a log that hides the ordinary lines is useless
     /// for the job it exists to do.
     func testOrdinaryLinesAreLeftAlone() {

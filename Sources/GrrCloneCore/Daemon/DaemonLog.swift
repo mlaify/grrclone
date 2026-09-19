@@ -135,6 +135,48 @@ public actor DaemonLog {
             with: "$1$2***",
             options: .regularExpression)
 
+        // The rc API's own trace, which carries the whole request.
+        //
+        // At DEBUG rclone logs every rc call as
+        // `rc: "config/create": with parameters map[name:w opt:map[…]
+        // parameters:map[pass:hunter2 url:… user:u] type:webdav]`, and every reply as
+        // `rc: "config/dump": reply map[…]`. Captured from rclone 1.75.1, not
+        // supposed. The key-word patterns above missed it entirely: the password
+        // sits under `pass`, which none of them name, and the value is inside Go's
+        // `map[k:v k:v]` form, which none of them parse. So the wizard's password
+        // and the edit sheet's replacement went into the log in clear text under a
+        // tab that says passwords are removed automatically — verified before this
+        // was written (#109).
+        //
+        // The keys are the user's backend's option names. They cannot be listed:
+        // `pass`, `key`, `sas_url`, `client_id`, `account`, and whatever rclone adds
+        // next month. So the payload goes, not the value. Everything after
+        // `with parameters` or `reply` is replaced for any `config/*` call — those
+        // are the calls that carry or return credentials, obscured ones included,
+        // and `rclone reveal` undoes obscuring in one step. The method name and
+        // the trailing error survive, which is what a diagnosis needs.
+        result = result.replacingOccurrences(
+            of: "(rc: \"config/[A-Za-z]+\": (?:with parameters|reply)) .*$",
+            with: "$1 ***",
+            options: .regularExpression)
+
+        // Other rc calls carry no credentials by construction — grrclone never sends
+        // any — but a backend command or a serve with `user`/`pass` would. Redact a
+        // `parameters:map[…]` block wherever it appears, to the end of the line:
+        // the map cannot be parsed reliably, because a value may contain `]`.
+        result = result.replacingOccurrences(
+            of: "(rc: \"[A-Za-z/]+\": with parameters .*?\\bparameters:map\\[).*$",
+            with: "$1***",
+            options: .regularExpression)
+
+        // Bare short keys rclone's backends use for secrets, in `key:value` or
+        // `key=value` form. Word-bounded, unlike the list above, because `key` and
+        // `pass` are ordinary words: `keychain:` and `bypass:` must not trip this.
+        result = result.replacingOccurrences(
+            of: "(?i)\\b((?:pass|key|sas_url|client_id|access_key_id|secret_access_key|key_file_pass|service_principal_file)[\"']?\\s*[:=]\\s*[\"']?)[^\\s,\"'}&\\]]+",
+            with: "$1***",
+            options: .regularExpression)
+
         return result
     }
 }
