@@ -316,8 +316,12 @@ final class AppModel: ObservableObject {
         await refreshConfigEncryptionState()
         if updateChecksEnabled {
             startUpdateCheckTimer()
-            checkForUpdates()
-            Task { await refreshNotificationAuthorisation() }
+            // Ask before the first check, so a release found immediately can still
+            // be announced rather than being recorded as told to nobody.
+            Task {
+                await requestNotificationPermissionIfNeverAsked()
+                checkForUpdates()
+            }
         }
         startWatchingForBreakage()
         startPollingActivity()
@@ -769,10 +773,17 @@ final class AppModel: ObservableObject {
         guard UpdateNotice.shouldNotify(about: update.version,
                                         current: currentVersion,
                                         lastNotified: lastNotifiedVersion) else { return }
-        await notifier.post(version: update.version,
-                            installation: installation,
-                            pageURL: update.pageURL)
-        lastNotifiedVersion = update.version
+        // Record it only if something was actually shown.
+        //
+        // Enabling checks fires the permission request and the first check as two
+        // independent tasks. If GitHub answers while the permission dialog is still
+        // on screen, posting fails for want of authorisation — and marking the
+        // version as announced anyway means the user grants permission and then
+        // never hears about the very release that prompted them to.
+        let delivered = await notifier.post(version: update.version,
+                                            installation: installation,
+                                            pageURL: update.pageURL)
+        if delivered { lastNotifiedVersion = update.version }
     }
 
     /// The exact command to upgrade, for the Copy button.
@@ -786,6 +797,24 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(upgradeCommand, forType: .string)
         status = "Copied: \(upgradeCommand)"
+    }
+
+    /// Ask for the notification permission if macOS has never asked on our behalf.
+    ///
+    /// The opt-in path asks in its `didSet`, which covers someone turning checks on
+    /// today. It does **not** cover the people this feature is for: anyone whose
+    /// preference was already true from an earlier version never runs that observer,
+    /// because a stored property's `didSet` does not fire during initialisation. They
+    /// would have been left with a feature that silently never worked.
+    ///
+    /// Only when undecided. Asking again after a refusal is how an app becomes
+    /// something people mute, and the check still works without it.
+    private func requestNotificationPermissionIfNeverAsked() async {
+        if await notifier.isUndecided() {
+            notificationsAuthorised = await notifier.requestPermission()
+        } else {
+            await refreshNotificationAuthorisation()
+        }
     }
 
     /// Refresh the permission state without prompting, for the Updates tab.

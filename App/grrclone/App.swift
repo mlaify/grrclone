@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 import GrrCloneCore
 
 @main
@@ -52,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// after termination is already under way.
     private var terminationAnswered = false
 
+    /// Retained deliberately. `UNUserNotificationCenter.delegate` is a weak
+    /// reference, so a delegate created and assigned inline is deallocated
+    /// immediately and both callbacks silently never fire — which is exactly what
+    /// happened when this class was written and never wired up at all.
+    private let notificationDelegate = UpdateNotificationDelegate()
+
     /// Reopening a menu bar app — double-clicking it in Finder, or opening it again
     /// while it is already running — otherwise does nothing at all, which reads as the
     /// app being broken. Showing Settings is the useful interpretation, and it is the
@@ -70,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+
+        // Must be set before any notification is delivered, or a click on one does
+        // nothing and a notification arriving while the menu is open is swallowed.
+        UNUserNotificationCenter.current().delegate = notificationDelegate
 
         // A test affordance, because this is otherwise unverifiable: the menu bar
         // popover closes the instant anything else takes focus, so UI automation

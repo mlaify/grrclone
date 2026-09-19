@@ -5,12 +5,18 @@ import GrrCloneCore
 
 /// Posts a macOS notification when an update is found.
 ///
-/// **This is the one permission grrclone asks for.** It is requested at the moment
-/// the user turns update checks on, not at launch, because that is the only moment
-/// where the request explains itself: they have just asked to be told about new
-/// versions, so being asked how is expected. A permission prompt on first launch,
-/// before the user has asked for anything, is the thing that trains people to click
-/// Don't Allow.
+/// **This is the one permission grrclone asks for**, and it is asked once.
+///
+/// Normally at the moment the user turns update checks on, because that is where
+/// the request explains itself: they have just asked to be told about new versions,
+/// so being asked how is expected. A prompt at first launch, before the user has
+/// asked for anything, is what trains people to click Don't Allow.
+///
+/// The exception is someone whose preference was already on from an earlier
+/// version. A stored property's `didSet` does not fire during initialisation, so
+/// they never pass through the opt-in path and would be left with a feature that
+/// silently never worked. They are asked at launch instead — once, and only if
+/// macOS has never asked on our behalf.
 ///
 /// Declining is a real answer and costs nothing else: the check still runs, the
 /// menu bar icon still marks an available update, and Settings still shows it.
@@ -35,6 +41,15 @@ final class UpdateNotifier {
         (try? await centre.requestAuthorization(options: [.alert])) ?? false
     }
 
+    /// Whether macOS has never asked on our behalf.
+    ///
+    /// Distinguishes "has not been asked" from "was asked and said no". Only the
+    /// first is worth prompting for; re-asking after a refusal is how an app
+    /// becomes something people mute.
+    func isUndecided() async -> Bool {
+        await centre.notificationSettings().authorizationStatus == .notDetermined
+    }
+
     /// Whether the user has already granted it, without prompting.
     func isAuthorised() async -> Bool {
         let settings = await centre.notificationSettings()
@@ -42,8 +57,17 @@ final class UpdateNotifier {
             || settings.authorizationStatus == .provisional
     }
 
-    func post(version: ReleaseVersion, installation: InstallationKind, pageURL: URL) async {
-        guard await isAuthorised() else { return }
+    /// Returns whether a notification was actually delivered.
+    ///
+    /// The caller records which version it has announced, and must only do so when
+    /// something was really shown. Recording regardless means a version announced
+    /// while permission was still pending is marked as told and never mentioned
+    /// again — the user grants permission and hears nothing about the release that
+    /// prompted them to.
+    @discardableResult
+    func post(version: ReleaseVersion, installation: InstallationKind,
+              pageURL: URL) async -> Bool {
+        guard await isAuthorised() else { return false }
 
         let content = UNMutableNotificationContent()
         content.title = UpdateNotice.title(for: version)
@@ -56,7 +80,12 @@ final class UpdateNotifier {
         // nil trigger delivers immediately.
         let request = UNNotificationRequest(identifier: "update-\(version.description)",
                                             content: content, trigger: nil)
-        try? await centre.add(request)
+        do {
+            try await centre.add(request)
+            return true
+        } catch {
+            return false
+        }
     }
 }
 
