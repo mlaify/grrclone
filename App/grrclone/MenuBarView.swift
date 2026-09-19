@@ -96,7 +96,10 @@ struct MenuBarView: View {
                 .foregroundStyle(.orange)
             Text(error)
                 .font(.caption)
-                .lineLimit(3)
+                // Was 3. A mount error that names the fix runs four lines, and the
+                // fourth was the fix. An error cut off before its remedy is worse
+                // than a long one.
+                .lineLimit(8)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             Spacer(minLength: 0)
@@ -301,6 +304,19 @@ struct MenuBarView: View {
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.orange)
                     }
+                }
+                if mount.count > 1 {
+                    // The command lives here, not in the error notice. The error is
+                    // dismissible and capped in height, so a command at the end of
+                    // it was truncated away — the fix in #104 shipped a sentence
+                    // nobody could read. This notice persists as long as the mount
+                    // does, which is exactly as long as the advice applies.
+                    Text("Disconnect with  umount -f \(mount.path)  once per layer")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
