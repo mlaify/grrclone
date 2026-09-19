@@ -70,7 +70,7 @@ final class RemoteEditingTests: XCTestCase {
     }
 
     private func makeRemote(_ binary: URL, password: String = "alice-secret") throws {
-        try rclone(binary, ["config", "create", "r", "webdav",
+        try rclone(binary, ["config", "create", "r", "webdav", "--",
                             "url", "https://example.invalid", "user", "alice",
                             "pass", password])
     }
@@ -134,8 +134,15 @@ final class RemoteEditingTests: XCTestCase {
 
         // A plaintext password that is, coincidentally, valid obscured text.
         let looksObscured = try rclone(binary, ["obscure", "hunter2"], withConfig: false)
-        try rclone(binary, ["config", "update", "r", "pass", looksObscured,
-                            "--non-interactive"])
+        // Flags first, then `--`, then the positional value.
+        //
+        // `rclone obscure` emits a random string, and roughly one run in thirty it
+        // begins with `-`, which the CLI then parses as a flag: "unknown shorthand
+        // flag: 'O'". That made this test fail about that often, and it reached main
+        // because CI happened to draw a value that did not start with a dash. `--`
+        // terminates flag parsing; the flags go before it so they are still honoured.
+        try rclone(binary, ["config", "update", "r", "--non-interactive",
+                            "--", "pass", looksObscured])
 
         let stored = try XCTUnwrap(storedValue("pass"))
         let revealed = try rclone(binary, ["reveal", stored], withConfig: false)
@@ -153,8 +160,8 @@ final class RemoteEditingTests: XCTestCase {
         try makeRemote(binary)
 
         let looksObscured = try rclone(binary, ["obscure", "hunter2"], withConfig: false)
-        try rclone(binary, ["config", "update", "r", "pass", looksObscured,
-                            "--obscure", "--non-interactive"])
+        try rclone(binary, ["config", "update", "r", "--obscure", "--non-interactive",
+                            "--", "pass", looksObscured])
 
         let stored = try XCTUnwrap(storedValue("pass"))
         XCTAssertEqual(try rclone(binary, ["reveal", stored], withConfig: false),
