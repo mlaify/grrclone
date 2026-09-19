@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.7.0 is released**, and installable two ways:
+**v0.7.1 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-280 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+291 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -38,8 +38,35 @@ did not before, and which was proved rather than assumed.
 | v0.6.0 | **Released** 2026-09-19 |
 | v0.6.1 | **Released** 2026-09-19 |
 | v0.7.0 | **Released** 2026-09-19 |
+| v0.7.1 | **Released** 2026-09-19 |
 
 ## Releases
+
+### v0.7.1 — 2026-09-19
+
+Two fixes that came out of one screenshot of a real machine, both about grrclone
+being honest with the person in front of it.
+
+A freshly upgraded copy no longer quits itself when launched while the previous copy
+is still disconnecting. `SingleInstance` refused on sight of another copy, and its own
+docstring named the upgrade as the case where that is wrong — a quit can drain uploads
+for minutes, so "the new version is broken" was really "it gave up too early". It
+waits now, with the deadline derived from the real teardown budgets after a test
+caught the first guess being shorter than a single unmount, and only briefly for a
+copy at the same path so a double-click on the running app is not stalled for six
+minutes.
+
+When a mount point cannot be used because something is *already mounted* there, the
+menu says so and names `umount -f`, instead of counting that volume's files and
+telling you to move them. That was observed live: three NFS mounts stacked on
+`~/Cloud`, none in the registry, reported as "582 existing items" that did not exist.
+The command was first placed at the end of an error capped at three lines — the
+fourth line — so the fix in one PR was invisible until Codex checked the next. It now
+sits beside the `×N` count where it persists. The app also stopped recommending
+`diskutil umount force`, which refuses stacked NFS; that too was learned the hard way.
+
+`docs/limitations.md` records why stacked dead mounts are hard and that `umount -f`
+saying "Operation timed out" is evidence of nothing.
 
 ### v0.7.0 — 2026-09-19
 
