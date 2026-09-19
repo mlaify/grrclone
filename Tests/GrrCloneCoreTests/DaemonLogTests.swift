@@ -228,6 +228,37 @@ final class DaemonLogBufferTests: XCTestCase {
         XCTAssertTrue(stored.contains("ordinary line after"), "dropping must stop at the newline")
     }
 
+    /// The two pipes interleave. A complete stdout line arriving while stderr is
+    /// mid-way through an over-long sensitive trace must be stored as itself, and
+    /// must not be taken for the end of that trace — which is what let the real
+    /// tail through when the state was shared. Codex found this on the second
+    /// review.
+    func testAnotherStreamsLineDoesNotEndASensitiveLine() async {
+        let log = DaemonLog()
+        let secret = "INTERLEAVED-SECRET-\(UUID().uuidString)"
+        let head = "DEBUG : rc: \"config/dump\": reply map[gdrive:map[service_account_credentials:"
+            + String(repeating: "A", count: DaemonLog.flushLimit + 100)
+        await log.append(Data(head.utf8), from: .stderr)
+        await log.append(Data("NOTICE : stdout says hello\n".utf8), from: .stdout)
+        await log.append(Data("\(secret) type:drive]]: <nil>\nNOTICE : stderr after\n".utf8), from: .stderr)
+
+        let stored = await log.recent.map(\.text)
+        XCTAssertFalse(stored.joined().contains(secret), "the tail leaked past a line from the other pipe: \(stored)")
+        XCTAssertTrue(stored.contains("NOTICE : stdout says hello"), "the other pipe's line is kept intact")
+        XCTAssertTrue(stored.contains("NOTICE : stderr after"), "dropping stops at stderr's own newline")
+    }
+
+    /// Ordinary interleaving, with nothing sensitive: each stream's partial line is
+    /// its own, so a stdout fragment is never glued onto a stderr one.
+    func testStreamsAssembleTheirOwnLines() async {
+        let log = DaemonLog()
+        await log.append(Data("INFO : err-part-one ".utf8), from: .stderr)
+        await log.append(Data("INFO : out-whole\n".utf8), from: .stdout)
+        await log.append(Data("err-part-two\n".utf8), from: .stderr)
+        let stored = await log.recent.map(\.text)
+        XCTAssertEqual(stored, ["INFO : out-whole", "INFO : err-part-one err-part-two"])
+    }
+
     /// An over-long line that is *not* sensitive is still flushed in pieces, as
     /// before: the fix must not turn every long line into nothing.
     func testAnOverLongOrdinaryLineIsStillKept() async {

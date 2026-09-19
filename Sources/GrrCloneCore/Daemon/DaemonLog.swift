@@ -23,18 +23,34 @@ public actor DaemonLog {
 
     private var lines: [Line] = []
     private var nextID: UInt64 = 0
-    private var partial = ""
     private let capacity: Int
 
-    /// True while the rest of an over-long *sensitive* line is still arriving.
+    /// Which of the daemon's two output streams bytes came from.
     ///
-    /// A line longer than the flush limit is recorded in fragments. The first
-    /// fragment carries the `rc: "config/…"` prefix and is redacted by it; the
-    /// later ones do not, and would have been stored as ordinary text — which for a
-    /// `config/dump` reply on a large configuration, or a service-account JSON
-    /// blob, is most of the secret. So once a flushed fragment is a sensitive
-    /// trace, everything up to its newline is dropped rather than stored.
-    private var droppingRestOfSensitiveLine = false
+    /// Assembly state is kept per stream, not per log. Both pipes drain into one
+    /// log, and their reads interleave: a complete line from one arriving while
+    /// the other is mid-line must neither be glued onto that line nor be mistaken
+    /// for the end of it. Codex found the second case in review — a line from the
+    /// other pipe would have cleared the drop flag below and let the real tail of
+    /// a sensitive trace through.
+    public enum Stream: Sendable, Hashable {
+        case stdout, stderr
+    }
+
+    private struct StreamState {
+        var partial = ""
+        /// True while the rest of an over-long *sensitive* line is still arriving.
+        ///
+        /// A line longer than the flush limit is recorded in fragments. The first
+        /// fragment carries the `rc: "config/…"` prefix and is redacted by it; the
+        /// later ones do not, and would have been stored as ordinary text — which
+        /// for a `config/dump` reply on a large configuration, or a service-account
+        /// JSON blob, is most of the secret. So once a flushed fragment is a
+        /// sensitive trace, everything up to its newline is dropped rather than
+        /// stored.
+        var droppingRestOfSensitiveLine = false
+    }
+    private var streams: [Stream: StreamState] = [:]
 
     public init(capacity: Int = 2000) {
         self.capacity = capacity
@@ -46,33 +62,35 @@ public actor DaemonLog {
     /// the rest of it arrives. Without that, a log line could be redacted in two
     /// halves and a secret straddling the boundary would survive in neither half's
     /// pattern but in the joined output.
-    public func append(_ data: Data) {
+    public func append(_ data: Data, from stream: Stream = .stderr) {
         guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-        partial += text
+        var state = streams[stream, default: StreamState()]
+        defer { streams[stream] = state }
+        state.partial += text
 
-        var pieces = partial.components(separatedBy: "\n")
-        partial = pieces.removeLast()
+        var pieces = state.partial.components(separatedBy: "\n")
+        state.partial = pieces.removeLast()
 
         for (index, piece) in pieces.enumerated() {
-            if index == 0 && droppingRestOfSensitiveLine {
+            if index == 0 && state.droppingRestOfSensitiveLine {
                 // The tail of a line whose head was already flushed and redacted.
-                droppingRestOfSensitiveLine = false
+                state.droppingRestOfSensitiveLine = false
                 continue
             }
             if !piece.trimmingCharacters(in: .whitespaces).isEmpty { record(piece) }
         }
 
         // A very long line with no newline must not grow without bound.
-        if partial.count > Self.flushLimit {
-            if droppingRestOfSensitiveLine {
+        if state.partial.count > Self.flushLimit {
+            if state.droppingRestOfSensitiveLine {
                 // Still inside the same sensitive line; keep dropping.
-            } else if Self.isSensitiveTrace(partial) {
-                record(partial)   // redacted by its prefix
-                droppingRestOfSensitiveLine = true
+            } else if Self.isSensitiveTrace(state.partial) {
+                record(state.partial)   // redacted by its prefix
+                state.droppingRestOfSensitiveLine = true
             } else {
-                record(partial)
+                record(state.partial)
             }
-            partial = ""
+            state.partial = ""
         }
     }
 
@@ -97,7 +115,7 @@ public actor DaemonLog {
 
     public func clear() {
         lines.removeAll()
-        partial = ""
+        streams = [:]
     }
 
     /// Remove credentials before a line is stored.

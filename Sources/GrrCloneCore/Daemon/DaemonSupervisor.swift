@@ -206,11 +206,12 @@ public actor DaemonSupervisor {
         process.standardOutput = outPipe
 
         let log = self.log
-        for pipe in [errPipe, outPipe] {
+        for (pipe, stream) in [(errPipe, DaemonLog.Stream.stderr), (outPipe, .stdout)] {
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 guard !data.isEmpty else { return }
-                Task { await log.append(data) }
+                // Named, so the log assembles each stream's lines on their own.
+                Task { await log.append(data, from: stream) }
             }
         }
 
