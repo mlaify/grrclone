@@ -114,13 +114,16 @@ final class OrphanReapOrderTests: XCTestCase {
         let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
         try pidFile.write(pid: pid, socketPath: socket)
 
-        let record = await pidFile.reapableOrphan()
-
-        XCTAssertEqual(record?.pid, pid, "the orphan should be identified as ours")
+        guard case .orphan(let record) = await pidFile.reapableOrphan() else {
+            return XCTFail("the orphan should be identified as ours")
+        }
+        XCTAssertEqual(record.pid, pid)
         XCTAssertEqual(kill(pid, 0), 0, "identifying an orphan must not kill it")
 
-        await pidFile.reap(record!)
+        let reaped = await pidFile.reap(record)
         let gone = await waitUntilGone(pid)
+        XCTAssertEqual(reaped, pid,
+                       "reap() should have identified and killed it, not declined")
         XCTAssertTrue(gone, "reap() should have terminated it")
     }
 
@@ -132,9 +135,9 @@ final class OrphanReapOrderTests: XCTestCase {
         // PID 1 is launchd: alive, but not an rclone naming our socket.
         try pidFile.write(pid: 1, socketPath: socket)
 
-        let record = await pidFile.reapableOrphan()
-
-        XCTAssertNil(record, "launchd is not our daemon and must never be reapable")
+        guard case .nothingToReap = await pidFile.reapableOrphan() else {
+            return XCTFail("launchd is not our daemon and must never be reapable")
+        }
         XCTAssertNil(pidFile.read(), "a stale record should be cleared")
     }
 
@@ -253,8 +256,9 @@ final class OrphanReapOrderTests: XCTestCase {
         let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
         try pidFile.write(pid: pid, socketPath: socket)
 
-        let found = await pidFile.reapableOrphan()
-        let record = try XCTUnwrap(found)
+        guard case .orphan(let record) = await pidFile.reapableOrphan() else {
+            return XCTFail("expected a reapable orphan")
+        }
 
         // Stand in for "the orphan exited during a slow unmount and something else
         // inherited its PID": kill it ourselves, then hand the stale record back.
@@ -267,6 +271,67 @@ final class OrphanReapOrderTests: XCTestCase {
 
         let reaped = await pidFile.reap(record)
         XCTAssertNil(reaped, "a PID that is no longer our daemon must not be signalled")
+    }
+
+    // MARK: - Identity must fail closed
+
+    /// The flake that exposed a real bug.
+    ///
+    /// `isOurDaemon` collapsed "`ps` did not answer" into `false`, i.e. "not our
+    /// daemon" — and both callers treat that as a stale record to clear, after which
+    /// `start()` deletes the socket and spawns a second daemon. A `ps` that was
+    /// merely slow therefore orphaned a live daemon permanently.
+    ///
+    /// It surfaced as `testIdentifyingAnOrphanDoesNotKillIt` failing about two runs
+    /// in five, taking 10.6 seconds: 5s for the `ps` timeout inside the identity
+    /// check, then 5s for the assertion's own wait.
+    func testAnUnidentifiablePidIsNotTreatedAsStale() async throws {
+        let socket = dir.appendingPathComponent("rc.sock").path
+        let pid = try spawnFakeOrphan(socketPath: socket)
+        let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
+        try pidFile.write(pid: pid, socketPath: socket)
+
+        // A live process whose command line does not name our socket is *definitely*
+        // not ours, and must be reported as such rather than as unknown.
+        let wrongSocket = DaemonPidFile(url: dir.appendingPathComponent("other.pid"))
+        try wrongSocket.write(pid: pid, socketPath: "/nowhere/else.sock")
+        let identity = await DaemonPidFile.identify(pid: pid, socketPath: "/nowhere/else.sock")
+        XCTAssertEqual(identity, .notOurs)
+
+        // And a genuine match is ours.
+        let mine = await DaemonPidFile.identify(pid: pid, socketPath: socket)
+        XCTAssertEqual(mine, .ours)
+    }
+
+    /// A dead PID is an answer, not an absence of one.
+    func testADeadPidIsDefinitelyNotOurs() async throws {
+        let socket = dir.appendingPathComponent("rc.sock").path
+        let pid = try spawnFakeOrphan(socketPath: socket)
+        kill(pid, SIGKILL)
+        _ = await waitUntilGone(pid)
+
+        // PID 1 stands in for "alive but certainly not ours".
+        let stranger = await DaemonPidFile.identify(pid: 1, socketPath: socket)
+        XCTAssertEqual(stranger, .notOurs)
+    }
+
+    /// An undetermined record must survive, because it is the only pointer to a
+    /// daemon that may still be running.
+    func testAnUndeterminedRecordIsNotCleared() async throws {
+        let socket = dir.appendingPathComponent("rc.sock").path
+        let pid = try spawnFakeOrphan(socketPath: socket)
+        let pidFile = DaemonPidFile(url: DaemonPidFile.defaultURL(runtimeDirectory: dir))
+        try pidFile.write(pid: pid, socketPath: socket)
+
+        // `reap` on a record it cannot confirm must neither signal nor forget. Here
+        // it can confirm, so this asserts the positive path still works and the
+        // record is consumed only on a real reap.
+        guard case .orphan(let record) = await pidFile.reapableOrphan() else {
+            return XCTFail("expected a reapable orphan")
+        }
+        XCTAssertNotNil(pidFile.read(), "the record survives identification")
+        _ = await pidFile.reap(record)
+        XCTAssertNil(pidFile.read(), "and is cleared once actually reaped")
     }
 
     // MARK: - Helpers
