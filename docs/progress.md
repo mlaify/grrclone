@@ -3,11 +3,11 @@
 A running record of what is done, what is next, and which decisions are settled.
 Update this at the end of each working session.
 
-Last updated: 2026-09-18.
+Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.4.0 is released**, and installable two ways:
+**v0.6.0 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-230 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+267 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -35,8 +35,36 @@ did not before, and which was proved rather than assumed.
 | v0.3.1 | **Released** 2026-09-17 |
 | v0.3.2 | **Released** 2026-09-18 |
 | v0.4.0 | **Released** 2026-09-18 |
+| v0.6.0 | **Released** 2026-09-19 |
 
 ## Releases
+
+### v0.6.0 — 2026-09-19
+
+Four features, and the first release since 0.1.0 that is about reach rather than
+repair.
+
+- **Edit a remote.** A rotated key or changed password no longer means deleting the
+  connection and rebuilding it. Password fields start empty: `config/dump` returns
+  the *obscured* secret, which `rclone reveal` undoes in one step, so showing it
+  would be showing dots that are not the password and cannot be corrected into one.
+- **Transfer progress**, with the file, how far along, how fast and how long is
+  left, rather than only a count.
+- **Mount one folder** of a remote instead of all of it.
+- **A Cache tab**, showing what each remote's cache is using and offering to clear
+  it — refused while the remote is connected, while anything is still uploading, or
+  when the cache cannot be read.
+
+Two things worth recording, both found by driving rclone rather than reading about
+it. `core/stats` with `short: true` omits the `transferring` array entirely, so
+the existing unused helper could only ever report zero transfers. And rclone decides
+whether to obscure a value by *trying to reveal it first* — so a literal password
+that happens to be valid obscured text gets revealed instead of obscured, storing
+something the user never typed. `updateRemote` forces `obscure`, and a test pins
+the misfire so a future rclone fix is noticed rather than silently worked around.
+
+The version skips 0.5.0: the milestone was numbered before the audit work landed as
+0.4.0, and renumbering issues after the fact is worse than a gap.
 
 ### v0.4.0 — 2026-09-18
 

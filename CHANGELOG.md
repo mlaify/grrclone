@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-19
+
 ### Added
 
 - **Edit an existing remote** from its page in Settings — a rotated key or a changed
@@ -147,7 +149,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mlaify/grrclone/compare/v0.4.0...v0.6.0
 [0.4.0]: https://github.com/mlaify/grrclone/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/mlaify/grrclone/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/mlaify/grrclone/compare/v0.3.0...v0.3.1

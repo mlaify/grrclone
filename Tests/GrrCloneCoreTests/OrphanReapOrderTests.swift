@@ -41,11 +41,36 @@ final class OrphanReapOrderTests: XCTestCase {
         supervisors = []
         for pid in spawned where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
         spawned = []
+        spawnedProcesses = [:]
         try? FileManager.default.removeItem(at: dir)
     }
 
     private var spawned: [Int32] = []
+    /// The `Process` objects behind `spawned`, kept because a dead child is a
+    /// zombie until its parent reaps it — see `waitUntilGone`.
+    private var spawnedProcesses: [Int32: Process] = [:]
     private var supervisors: [DaemonSupervisor] = []
+
+    /// Wait for a spawned child to actually be gone, and say whether it went.
+    ///
+    /// **Not `kill(pid, 0)`.** These fakes are children of the test process, so once
+    /// they die they remain zombies until Foundation reaps them — and `kill(pid, 0)`
+    /// on a zombie succeeds, because the PID is still in the process table. That
+    /// made `testIdentifyingAnOrphanDoesNotKillIt` fail intermittently: the assertion
+    /// was racing Foundation's reaper rather than testing anything about `reap()`.
+    /// `Process.isRunning` is false as soon as the child has exited, zombie or not.
+    private func waitUntilGone(_ pid: Int32, timeout: TimeInterval = 5) async -> Bool {
+        guard let process = spawnedProcesses[pid] else {
+            // Not ours to reason about; fall back to the PID check.
+            return kill(pid, 0) != 0
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !process.isRunning { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return !process.isRunning
+    }
 
     /// Every supervisor a test starts goes through here, so tearDown can stop it.
     private func makeSupervisor(binary: URL) -> DaemonSupervisor {
@@ -74,6 +99,7 @@ final class OrphanReapOrderTests: XCTestCase {
         process.arguments = ["rcd", "--rc-addr", "unix://\(socketPath)"]
         try process.run()
         spawned.append(process.processIdentifier)
+        spawnedProcesses[process.processIdentifier] = process
         return process.processIdentifier
     }
 
@@ -94,7 +120,8 @@ final class OrphanReapOrderTests: XCTestCase {
         XCTAssertEqual(kill(pid, 0), 0, "identifying an orphan must not kill it")
 
         await pidFile.reap(record!)
-        XCTAssertNotEqual(kill(pid, 0), 0, "reap() should have terminated it")
+        let gone = await waitUntilGone(pid)
+        XCTAssertTrue(gone, "reap() should have terminated it")
     }
 
     /// A record whose PID is no longer ours must be cleared and must not be actionable.
@@ -141,7 +168,8 @@ final class OrphanReapOrderTests: XCTestCase {
         XCTAssertTrue(ran, "the cleanup hook must run when an orphan is found")
         XCTAssertTrue(aliveWhenCalled,
                       "mounts must be brought down while the orphan is still serving them")
-        XCTAssertNotEqual(kill(orphanPID, 0), 0, "the orphan should be gone afterwards")
+        let gone = await waitUntilGone(orphanPID)
+        XCTAssertTrue(gone, "the orphan should be gone afterwards")
 
         let unmounted = await supervisor.orphanMountsUnmounted
         XCTAssertEqual(unmounted, ["/fake/mountpoint"],
