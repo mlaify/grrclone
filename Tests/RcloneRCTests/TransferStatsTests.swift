@@ -114,4 +114,24 @@ final class TransferStatsTests: XCTestCase {
         let parsed = try stats(json)
         XCTAssertEqual(parsed.transferring.map(\.name), ["real.bin"])
     }
+    /// `core/stats` is daemon-wide, so two remotes uploading the same relative path
+    /// both come back under the same `name`. Identifying rows by name alone gives
+    /// `ForEach` duplicate ids, and SwiftUI then shows one transfer's progress
+    /// against the other's name.
+    func testSimultaneousTransfersOfTheSamePathHaveDistinctIdentities() throws {
+        let json = """
+        {"transferring":[
+          {"name":"notes.md","size":100,"bytes":10,"speed":1,
+           "group":"job/1","srcFs":"personal:Documents"},
+          {"name":"notes.md","size":100,"bytes":90,"speed":1,
+           "group":"job/2","srcFs":"work:Documents"}]}
+        """
+        let parsed = try stats(json)
+
+        XCTAssertEqual(parsed.transferring.count, 2)
+        XCTAssertEqual(parsed.transferring.map(\.name), ["notes.md", "notes.md"],
+                       "same file name, as rclone reports it")
+        XCTAssertEqual(Set(parsed.transferring.map(\.id)).count, 2,
+                       "but they must not collide as list identities")
+    }
 }

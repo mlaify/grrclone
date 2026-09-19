@@ -130,8 +130,19 @@ public actor RcloneRCClient {
         public let bytes: Int
         public let speed: Double
         public let eta: Int?
+        /// rclone's own job grouping, and the filesystem the bytes come from.
+        /// Carried solely to tell two transfers of the same path apart.
+        public let group: String
+        public let srcFs: String
 
-        public var id: String { name }
+        /// Unique across simultaneous transfers, which `name` is not.
+        ///
+        /// `core/stats` is daemon-wide, so two mounted remotes uploading the same
+        /// relative path — `Documents/notes.md` from each of two accounts — both
+        /// arrive as `notes.md`. Identifying rows by name alone gives `ForEach`
+        /// duplicate ids, and SwiftUI then reuses or drops rows and shows one
+        /// transfer's progress against the other's name.
+        public var id: String { "\(group)|\(srcFs)|\(name)" }
 
         /// Nil when rclone has not reported a size, rather than a misleading 0%.
         public var fraction: Double? {
@@ -139,12 +150,15 @@ public actor RcloneRCClient {
             return min(1, Double(bytes) / Double(size))
         }
 
-        public init(name: String, size: Int, bytes: Int, speed: Double, eta: Int?) {
+        public init(name: String, size: Int, bytes: Int, speed: Double, eta: Int?,
+                    group: String = "", srcFs: String = "") {
             self.name = name
             self.size = size
             self.bytes = bytes
             self.speed = speed
             self.eta = eta
+            self.group = group
+            self.srcFs = srcFs
         }
     }
 
@@ -194,7 +208,9 @@ public actor RcloneRCClient {
                             size: entry["size"]?.intValue ?? 0,
                             bytes: entry["bytes"]?.intValue ?? 0,
                             speed: entry["speed"]?.doubleValue ?? 0,
-                            eta: entry["eta"]?.intValue)
+                            eta: entry["eta"]?.intValue,
+                            group: entry["group"]?.stringValue ?? "",
+                            srcFs: entry["srcFs"]?.stringValue ?? "")
         }
         return Stats(
             bytes: result["bytes"]?.intValue ?? 0,
