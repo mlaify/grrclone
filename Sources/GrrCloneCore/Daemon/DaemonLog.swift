@@ -26,6 +26,16 @@ public actor DaemonLog {
     private var partial = ""
     private let capacity: Int
 
+    /// True while the rest of an over-long *sensitive* line is still arriving.
+    ///
+    /// A line longer than the flush limit is recorded in fragments. The first
+    /// fragment carries the `rc: "config/…"` prefix and is redacted by it; the
+    /// later ones do not, and would have been stored as ordinary text — which for a
+    /// `config/dump` reply on a large configuration, or a service-account JSON
+    /// blob, is most of the secret. So once a flushed fragment is a sensitive
+    /// trace, everything up to its newline is dropped rather than stored.
+    private var droppingRestOfSensitiveLine = false
+
     public init(capacity: Int = 2000) {
         self.capacity = capacity
     }
@@ -43,15 +53,38 @@ public actor DaemonLog {
         var pieces = partial.components(separatedBy: "\n")
         partial = pieces.removeLast()
 
-        for piece in pieces where !piece.trimmingCharacters(in: .whitespaces).isEmpty {
-            record(piece)
+        for (index, piece) in pieces.enumerated() {
+            if index == 0 && droppingRestOfSensitiveLine {
+                // The tail of a line whose head was already flushed and redacted.
+                droppingRestOfSensitiveLine = false
+                continue
+            }
+            if !piece.trimmingCharacters(in: .whitespaces).isEmpty { record(piece) }
         }
 
         // A very long line with no newline must not grow without bound.
-        if partial.count > 8192 {
-            record(partial)
+        if partial.count > Self.flushLimit {
+            if droppingRestOfSensitiveLine {
+                // Still inside the same sensitive line; keep dropping.
+            } else if Self.isSensitiveTrace(partial) {
+                record(partial)   // redacted by its prefix
+                droppingRestOfSensitiveLine = true
+            } else {
+                record(partial)
+            }
             partial = ""
         }
+    }
+
+    /// Characters an unterminated line may reach before it is flushed in pieces.
+    static let flushLimit = 8192
+
+    /// Whether a fragment begins a line whose payload must not be stored in
+    /// pieces. An rc trace always carries its method within the first few dozen
+    /// characters, so the head fragment is enough to decide for the whole line.
+    static func isSensitiveTrace(_ fragment: String) -> Bool {
+        fragment.range(of: "rc: \"config/", options: .literal) != nil
+            || fragment.range(of: "\\bparameters:map\\[", options: .regularExpression) != nil
     }
 
     private func record(_ raw: String) {
@@ -151,12 +184,25 @@ public actor DaemonLog {
         // The keys are the user's backend's option names. They cannot be listed:
         // `pass`, `key`, `sas_url`, `client_id`, `account`, and whatever rclone adds
         // next month. So the payload goes, not the value. Everything after
-        // `with parameters` or `reply` is replaced for any `config/*` call — those
-        // are the calls that carry or return credentials, obscured ones included,
-        // and `rclone reveal` undoes obscuring in one step. The method name and
-        // the trailing error survive, which is what a diagnosis needs.
+        // `with parameters` is replaced for any `config/*` call — those are the
+        // calls that carry or return credentials, obscured ones included, and
+        // `rclone reveal` undoes obscuring in one step.
         result = result.replacingOccurrences(
-            of: "(rc: \"config/[A-Za-z]+\": (?:with parameters|reply)) .*$",
+            of: "(rc: \"config/[A-Za-z]+\": with parameters) .*$",
+            with: "$1 ***",
+            options: .regularExpression)
+
+        // A reply is `reply <map>: <error>`. The map goes; the error stays, because
+        // a failed `config/create` with its reason removed is a line that says only
+        // that something failed. The map is a Go `map[…]` and its closing bracket is
+        // the last `]` that is followed by `: `. A reply that does not have that
+        // shape is redacted whole rather than trusted.
+        result = result.replacingOccurrences(
+            of: "(rc: \"config/[A-Za-z]+\": reply) map\\[.*\\](: .*)$",
+            with: "$1 ***$2",
+            options: .regularExpression)
+        result = result.replacingOccurrences(
+            of: "(rc: \"config/[A-Za-z]+\": reply) (?!\\*\\*\\*).*$",
             with: "$1 ***",
             options: .regularExpression)
 
