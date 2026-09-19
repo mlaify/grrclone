@@ -15,7 +15,9 @@ on:
         required: true
 
 permissions:
-  contents: write   # to create the release and upload the DMG
+  contents: write       # to create the release and upload the DMG
+  id-token: write       # to get the OIDC token Sigstore signs the attestation with
+  attestations: write   # to record the provenance against this repository
 
 jobs:
   release:
@@ -170,6 +172,26 @@ jobs:
           xattr -w com.apple.quarantine "0083;00000000;Safari;" /tmp/dl.dmg
           spctl -a -vvv -t open --context context:primary-signature /tmp/dl.dmg
           xcrun stapler validate /tmp/dl.dmg
+
+      # Provenance, recorded in a public transparency log.
+      #
+      # Produces a Sigstore-signed in-toto SLSA statement binding this exact DMG's
+      # SHA-256 to the repository, commit, workflow and runner that produced it, and
+      # logs it to Rekor. Anyone can check it without trusting us:
+      #
+      #     gh attestation verify grrclone.dmg --repo mlaify/grrclone
+      #
+      # This is not a substitute for notarisation, which is what Gatekeeper enforces.
+      # It answers a different question: notarisation says Apple scanned a build
+      # signed by our Developer ID, this says which commit and workflow built it.
+      #
+      # Runs *before* publishing, against the same file the publish step uploads, so
+      # the digest attested is by construction the digest released. Attesting after
+      # publication would leave a window in which the two could differ.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: build/grrclone.dmg
 
       - name: Publish the release
         env:

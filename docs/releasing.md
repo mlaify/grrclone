@@ -74,6 +74,30 @@ after an unverified `.p12` reached a repository secret and failed a release.
   local file can pass something a real download would not; this is what caught an
   unsigned disk image that notarisation alone had made look fine.
 
+## Build provenance
+
+Every release carries a [Sigstore](https://www.sigstore.dev)-signed provenance
+statement, logged publicly to Rekor, binding the DMG's SHA-256 to the repository,
+commit, workflow and runner that produced it. Anyone can check it without trusting
+us or this document:
+
+```bash
+gh attestation verify grrclone.dmg --repo mlaify/grrclone
+```
+
+It answers a different question from notarisation, and neither replaces the other.
+Notarisation says Apple scanned a build signed by our Developer ID; provenance says
+*which commit and which workflow* produced that exact file. A stolen signing
+certificate defeats the first and not the second.
+
+The step runs before the publish step and against the same file it uploads, so the
+digest attested is by construction the digest released. Attesting afterwards would
+leave a window in which the two could differ.
+
+It needs `id-token: write` (for the OIDC token Sigstore signs with) and
+`attestations: write` on the workflow. Both are at the top of `release.yml`; the job
+is already restricted to tag pushes.
+
 ## Verifying a published release
 
 ```bash

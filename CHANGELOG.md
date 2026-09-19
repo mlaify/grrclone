@@ -11,6 +11,14 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Added
+
+- Releases now carry a **Sigstore-signed build provenance attestation**, logged to a
+  public transparency log. Anyone can verify which commit and workflow produced a
+  given download with `gh attestation verify grrclone.dmg --repo mlaify/grrclone` —
+  a different guarantee from Apple notarisation, and one a stolen signing
+  certificate would not defeat.
+
 ## [0.6.1] - 2026-09-19
 
 ### Fixed
