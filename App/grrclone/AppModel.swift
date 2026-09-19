@@ -522,6 +522,36 @@ final class AppModel: ObservableObject {
         status = "Added \(name)"
     }
 
+    // MARK: - Editing a remote
+
+    /// The remote the edit sheet is open on.
+    @Published var editingConnection: Connection?
+
+    func beginEditing(_ connection: Connection) { editingConnection = connection }
+
+    /// A remote's stored settings. Secrets arrive obscured — see `remoteConfig`.
+    func remoteConfig(named name: String) async throws -> [String: String] {
+        guard let supervisor else { throw DaemonSupervisor.Failure.notRunning }
+        return try await supervisor.requireClient().remoteConfig(name: name)
+    }
+
+    /// Apply changed settings, then pick the result up.
+    ///
+    /// A mounted connection keeps serving from the settings it started with — rclone
+    /// read them at `serve/start` — so the user is told to reconnect rather than left
+    /// to wonder why a corrected endpoint made no difference.
+    func updateRemote(named name: String, parameters: [String: String]) async throws {
+        guard let supervisor else { throw DaemonSupervisor.Failure.notRunning }
+        try await supervisor.requireClient().updateRemote(name: name, parameters: parameters)
+
+        let affected = rows.filter { $0.connection.remote == name && $0.state.isMounted }
+        for row in affected { needsRemount.insert(row.id) }
+        await refresh()
+        status = affected.isEmpty
+            ? "Updated \(name)"
+            : "Updated \(name) — reconnect for it to take effect"
+    }
+
     // MARK: - Cache
 
     @Published private(set) var cacheUsage: [UUID: VFSCache.Usage] = [:]
