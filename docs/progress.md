@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-291 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+216 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -39,6 +39,8 @@ did not before, and which was proved rather than assumed.
 | v0.6.1 | **Released** 2026-09-19 |
 | v0.7.0 | **Released** 2026-09-19 |
 | v0.7.1 | **Released** 2026-09-19 |
+| v0.8.0 | **In progress** — the safety fixes from the 2026-09-19 review |
+| v0.9.0 | Planned — robustness and polish |
 
 ## Releases
 
@@ -487,48 +489,70 @@ things in them are not waiting on us.
 | `v0.2.0` | Bandwidth limit, log viewer, opt-in update checks, crash-left-mountpoint fix | closed, shipped 2026-09-17 |
 | `v0.3.0` | Add-remote wizard, OAuth without a terminal, config encryption offer, soft-mount docs | closed, shipped 2026-09-17 |
 | `v0.4.0` | Audit fixes, delete a remote, the changelog | closed, shipped 2026-09-18 |
-| `v0.5.0` | Transfer visibility, remote editing, cache control | open |
+| `v0.5.0` | Transfer visibility, remote editing, cache control — shipped as 0.6.0 | closed |
+| `v0.7.0` | Daily update check, one permission, build provenance | closed, shipped 2026-09-19 |
+| `v0.8.0` | The 2026-09-19 review's safety fixes, and reclaiming fingerprinted mounts | open |
+| `v0.9.0` | Daemon exit detection, wizard hygiene, store honesty, arm64-only rclone | open |
 | `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
 | `Known limitations` | Documented, deliberately not fixed | never closes |
 
-Remaining work:
+### The 2026-09-19 review
 
-1. **Transfer progress is fetched but never shown**
-   ([#81](https://github.com/mlaify/grrclone/issues/81), `v0.5.0`). `core/stats` and
-   `vfs/queue` are already implemented in the rc client and nothing consumes them, so
-   the app can say "3 uploads pending" but not what, how fast, or how long. It is the
-   most visible gap against Mountain Duck and ExpanDrive, and the client work is done.
+A full read of the tree after 0.7.1 — every source file, the workflows and the
+scripts — looking for gaps rather than for the bug of the day. It filed fifteen
+issues, and the shape of them is the finding: **almost every one is a `try?` or a
+`?? []` in the mount core turning "could not tell" into "fine"**, the same family
+#71–#80 belonged to, in places that audit did not reach. Two were verified against
+the bundled rclone before filing rather than inferred, and both were real.
 
-2. **A remote's subpath cannot be set in the UI**
-   ([#82](https://github.com/mlaify/grrclone/issues/82), `v0.5.0`). `Connection.path`
-   exists and `fsSpec` composes it correctly; no view exposes it, so every connection
-   mounts the whole remote.
+**v0.8.0 — fix before anything else, in roughly this order.**
 
-3. **An existing remote cannot be edited**
-   ([#83](https://github.com/mlaify/grrclone/issues/83), `v0.5.0`). A rotated S3 key
-   currently means delete and re-create. `config/update` is already in the client; the
-   work is a form pre-filled from `config/dump`, which returns obscured secrets and
-   must not display or re-obscure them wrongly.
+- **Debug logs carried remote passwords** ([#109](https://github.com/mlaify/grrclone/issues/109)).
+  rclone traces every rc call at DEBUG, `parameters:map[pass:PLAINTEXT …]` included,
+  and the redaction knew neither the key nor the form. Caught `configPassword:` only
+  because it contains the word "password". Fixed in #123: the payload of every
+  `config/*` call is removed, not a value.
+- **Mounting over an existing mount** ([#108](https://github.com/mlaify/grrclone/issues/108)).
+  The refusal keyed on visible entries, so a dead mount whose listing returns EIO, or
+  an empty one, got a new layer on top. This is the mechanism behind the three
+  stacked mounts on the maintainer's `~/Cloud` that day.
+- **Adding a remote with an existing name replaces it** ([#110](https://github.com/mlaify/grrclone/issues/110)).
+  Verified: rclone's `config/create` deletes the section first; the wizard never
+  checked. No backup is taken on create.
+- **Health repair disowns a mount it could not unmount** ([#111](https://github.com/mlaify/grrclone/issues/111)).
+  `reconnect()` forgets the registry entry whether or not the unmount succeeded —
+  `disconnect()` gets this right and the two disagree.
+- **Duplicate names disown a live mount** ([#112](https://github.com/mlaify/grrclone/issues/112)),
+  **an unreadable `connections.json` is overwritten** ([#113](https://github.com/mlaify/grrclone/issues/113)),
+  **a whole-remote cache purge takes a mounted subpath twin's cache with it**
+  ([#114](https://github.com/mlaify/grrclone/issues/114)), **a failed mount-table read
+  authorises killing the orphan daemon** ([#115](https://github.com/mlaify/grrclone/issues/115)),
+  **unmount success is never confirmed against the table**
+  ([#116](https://github.com/mlaify/grrclone/issues/116)), **startup drops
+  `stillMounted` and erases the crash record if `start()` throws**
+  ([#117](https://github.com/mlaify/grrclone/issues/117)), and **blocking work on the
+  main actor against paths that may be wedged mounts**
+  ([#118](https://github.com/mlaify/grrclone/issues/118)).
+- **Reclaim unrecorded mounts that carry our fingerprint**
+  ([#105](https://github.com/mlaify/grrclone/issues/105)) — an offer, gated on the
+  exact option string, `localhost:/` source, a path under the mount root, and explicit
+  confirmation; unmount only, never kill a daemon.
 
-4. **No way to see or reclaim the VFS cache**
-   ([#84](https://github.com/mlaify/grrclone/issues/84), `v0.5.0`). Three remotes can
-   quietly hold 60 GB with nothing reporting it. The substance is the safety
-   interlock — a purge must refuse while anything is dirty — not the display.
+**v0.9.0 — after the core is honest again.** Detect the daemon exiting and probe on
+a timer instead of only on wake ([#119](https://github.com/mlaify/grrclone/issues/119));
+stop the wizard writing every advanced default into `rclone.conf`
+([#120](https://github.com/mlaify/grrclone/issues/120)); stop edits reporting saved
+when the store write failed ([#121](https://github.com/mlaify/grrclone/issues/121));
+bundle an arm64 rclone for an arm64-only app
+([#122](https://github.com/mlaify/grrclone/issues/122)).
 
-5. **homebrew-cask submission** ([#28](https://github.com/mlaify/grrclone/issues/28),
-   `Blocked on adoption`). Blocked on notability alone — 75 stars, or 30 forks, or 30
-   watchers. The cask passes `brew audit` otherwise; only that rule fails, which is
-   circular for a project Homebrew would help people find. The tap covers it meanwhile
-   and the same cask goes upstream unchanged when the bar is met.
+What came through clean: the release workflow, provenance attestation, signing
+scripts, privacy script and CodeQL setup — the only note against them is #122.
 
-6. **Mounts cannot land in `/Volumes`**
-   ([#85](https://github.com/mlaify/grrclone/issues/85), `Blocked on adoption`). The
-   most visible remaining difference in how the product *feels* against the paid
-   alternatives. Deferred on cost rather than difficulty: `/Volumes` is `root:wheel`
-   755, so creating the directory needs a privileged helper — a second signed
-   executable, an authorisation prompt that cuts against "asks for nothing", and
-   `diskarbitrationd` pruning the directory on every boot. Worth doing only if people
-   actually ask.
+**Still waiting on something outside the code:** homebrew-cask submission
+([#28](https://github.com/mlaify/grrclone/issues/28)) on notability alone, and
+`/Volumes` mounts ([#85](https://github.com/mlaify/grrclone/issues/85)) on whether
+anyone asks for a privileged helper.
 
 Known limitations with no fix available are filed under `Known limitations` so they can
 be pointed at rather than re-investigated each time someone notices them:
