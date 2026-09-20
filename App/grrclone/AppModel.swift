@@ -984,7 +984,7 @@ final class AppModel: ObservableObject {
             }
         }
         rows = updated.sorted { $0.connection.displayName < $1.connection.displayName }
-        foreignMounts = await manager?.foreignLookalikes() ?? []
+        foreignMounts = await manager?.foreignLookalikes(under: [mountRoot.path]) ?? []
     }
 
     // MARK: - Actions
@@ -1298,6 +1298,44 @@ final class AppModel: ObservableObject {
         let snapshot = await manager.activity()
         activity = snapshot
         return snapshot
+    }
+
+    /// Offer to disconnect an unrecorded mount that carries grrclone's fingerprint.
+    ///
+    /// An alert, with Cancel as the default: this is the one place grrclone acts on
+    /// a mount its registry does not record, and it does so only because the person
+    /// read what it was about to do and said yes. Nothing is killed either way.
+    func reclaimForeignMount(_ mount: ForeignMount) {
+        guard mount.reclaimable else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = mount.count > 1
+            ? "Disconnect \(mount.count) volumes stacked at \(mount.path)?"
+            : "Disconnect the volume at \(mount.path)?"
+        alert.informativeText = "grrclone did not record making this mount, but its options "
+            + "match grrclone's exactly, and it is inside the mount folder — most likely a "
+            + "leftover from an earlier version. It will be disconnected the same way a "
+            + "connection is. Nothing else is stopped or removed."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Disconnect")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        status = "Disconnecting \(mount.path)"
+        let root = mountRoot.path
+        Task.detached { [manager] in
+            guard let manager else { return }
+            do {
+                let removed = try await manager.reclaimForeignMount(at: mount.path, under: [root])
+                await MainActor.run {
+                    self.status = removed == 1 ? "Disconnected \(mount.path)"
+                                               : "Disconnected \(removed) volumes at \(mount.path)"
+                }
+            } catch {
+                await MainActor.run { self.lastError = error.localizedDescription }
+            }
+            await self.refresh()
+        }
     }
 
     /// Probe now, on demand, from the menu.

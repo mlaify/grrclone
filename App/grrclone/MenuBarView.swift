@@ -352,7 +352,18 @@ struct MenuBarView: View {
                             .foregroundStyle(.orange)
                     }
                 }
-                if mount.count > 1 {
+                if mount.reclaimable {
+                    // Its options are grrclone's own and it sits in the mount
+                    // folder: a leftover of an earlier version, most likely. Offered,
+                    // behind a confirmation whose default is Cancel (#105).
+                    HStack(spacing: 6) {
+                        Text("Looks like an earlier grrclone's; not recorded")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Disconnect…") { model.reclaimForeignMount(mount) }
+                            .controlSize(.small)
+                    }
+                } else if mount.count > 1 {
                     // The command lives here, not in the error notice. The error is
                     // dismissible and capped in height, so a command at the end of
                     // it was truncated away — the fix in #104 shipped a sentence
