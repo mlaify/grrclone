@@ -219,13 +219,32 @@ final class DaemonLogBufferTests: XCTestCase {
             + String(repeating: "A", count: DaemonLog.flushLimit + 100)
         await log.append(Data(head.utf8))
         await log.append(Data((String(repeating: "B", count: DaemonLog.flushLimit + 100)).utf8))
-        await log.append(Data("\(secret) type:drive]]: <nil>\nNOTICE : ordinary line after\n".utf8))
+        await log.append(Data("\(secret) type:drive]]: <nil>\n2026/09/19 16:29:00 NOTICE : ordinary line after\n".utf8))
 
         let stored = await log.recent.map(\.text).joined(separator: "\n")
         XCTAssertFalse(stored.contains(secret), "a later fragment leaked: \(stored.suffix(200))")
         XCTAssertFalse(stored.contains("BBBB"), "middle fragments must be dropped, not stored")
         XCTAssertTrue(stored.contains("rc: \"config/dump\": reply ***"), "the head is kept, redacted")
-        XCTAssertTrue(stored.contains("ordinary line after"), "dropping must stop at the newline")
+        XCTAssertTrue(stored.contains("ordinary line after"), "dropping must stop at the next record")
+    }
+
+    /// A trace is one record but not always one line: Go prints a string value
+    /// raw, so a PEM key or a service-account JSON blob spans physical lines, and
+    /// only the first carries the prefix. Everything until the next timestamped
+    /// record is part of the trace and must go with it. Codex found this on the
+    /// fourth review.
+    func testAMultiLineValueInsideATraceIsDroppedWithIt() async {
+        let log = DaemonLog()
+        let keyLine = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC-FAKE-KEY-LINE"
+        let trace = "2026/09/19 16:28:59 DEBUG : rc: \"config/create\": with parameters map[name:g parameters:map[service_account_credentials:{\"type\": \"service_account\",\n"
+            + "  \"private_key\": \"-----BEGIN PRIVATE KEY-----\n\(keyLine)\n-----END PRIVATE KEY-----\"} ] type:drive]\n"
+            + "2026/09/19 16:29:00 NOTICE : next record\n"
+        await log.append(Data(trace.utf8))
+        let stored = await log.recent.map(\.text)
+        XCTAssertFalse(stored.joined().contains(keyLine), "a continuation line leaked: \(stored)")
+        XCTAssertFalse(stored.joined().contains("private_key"), stored.joined(separator: " | "))
+        XCTAssertEqual(stored.count, 2, "the redacted head and the next record, nothing between: \(stored)")
+        XCTAssertEqual(stored.last, "2026/09/19 16:29:00 NOTICE : next record")
     }
 
     /// The two pipes interleave. A complete stdout line arriving while stderr is
@@ -240,7 +259,7 @@ final class DaemonLogBufferTests: XCTestCase {
             + String(repeating: "A", count: DaemonLog.flushLimit + 100)
         await log.append(Data(head.utf8), from: .stderr)
         await log.append(Data("NOTICE : stdout says hello\n".utf8), from: .stdout)
-        await log.append(Data("\(secret) type:drive]]: <nil>\nNOTICE : stderr after\n".utf8), from: .stderr)
+        await log.append(Data("\(secret) type:drive]]: <nil>\n2026/09/19 16:29:00 NOTICE : stderr after\n".utf8), from: .stderr)
 
         let stored = await log.recent.map(\.text)
         XCTAssertFalse(stored.joined().contains(secret), "the tail leaked past a line from the other pipe: \(stored)")
