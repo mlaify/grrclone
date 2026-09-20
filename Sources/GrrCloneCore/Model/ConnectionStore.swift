@@ -119,17 +119,19 @@ public actor ConnectionStore {
         }) {
             throw Conflict.displayNameTaken(connection.displayName, by: clash.remote)
         }
-        if let index = connections.firstIndex(where: { $0.id == connection.id }) {
-            connections[index] = connection
+        var updated = connections
+        if let index = updated.firstIndex(where: { $0.id == connection.id }) {
+            updated[index] = connection
         } else {
-            connections.append(connection)
+            updated.append(connection)
         }
-        try persist()
+        try commit(updated)
     }
 
     public func remove(id: UUID) throws {
-        connections.removeAll { $0.id == id }
-        try persist()
+        var updated = connections
+        updated.removeAll { $0.id == id }
+        try commit(updated)
     }
 
     /// Create a connection for every remote in rclone.conf that does not have one yet,
@@ -142,19 +144,24 @@ public actor ConnectionStore {
     public func adoptNewRemotes(_ remoteNames: [String]) throws -> [Connection] {
         let known = Set(connections.map(\.remote))
         var added: [Connection] = []
+        var updated = connections
 
         for name in remoteNames where !known.contains(name) {
             let connection = Connection(remote: name,
-                                        displayName: uniqueDisplayName(for: name))
-            connections.append(connection)
+                                        displayName: uniqueDisplayName(for: name, among: updated))
+            updated.append(connection)
             added.append(connection)
         }
-        if !added.isEmpty { try persist() }
+        if !added.isEmpty { try commit(updated) }
         return added
     }
 
     func uniqueDisplayName(for base: String) -> String {
-        let taken = Set(connections.map { Connection.folderKey($0.displayName) })
+        uniqueDisplayName(for: base, among: connections)
+    }
+
+    private func uniqueDisplayName(for base: String, among existing: [Connection]) -> String {
+        let taken = Set(existing.map { Connection.folderKey($0.displayName) })
         guard taken.contains(Connection.folderKey(base)) else { return base }
         var suffix = 2
         while taken.contains(Connection.folderKey("\(base) \(suffix)")) { suffix += 1 }
@@ -163,11 +170,19 @@ public actor ConnectionStore {
 
     // MARK: - Persistence
 
-    private func persist() throws {
+    /// Write first, then believe it.
+    ///
+    /// The in-memory list changes only once the file has. An earlier version
+    /// mutated and then persisted, so a refused or failed write left memory ahead
+    /// of disk: the UI read the new value back and showed an edit as saved — a
+    /// read-only switch, say — that vanished at the next launch (#121, and Codex on
+    /// the quarantine refusal, which the same ordering let through).
+    private func commit(_ updated: [Connection]) throws {
         guard !refusingWrites else { throw Conflict.unreadableStoreStillInPlace(fileURL.path) }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(connections).write(to: fileURL, options: .atomic)
+        try encoder.encode(updated).write(to: fileURL, options: .atomic)
+        connections = updated
     }
 
     private static func load(from url: URL) throws -> [Connection] {
