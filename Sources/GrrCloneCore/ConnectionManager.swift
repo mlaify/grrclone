@@ -473,6 +473,10 @@ public actor ConnectionManager {
         /// configuration would leave that volume with no configuration to come back
         /// to, and purging the cache would delete files it is serving.
         case remoteInUse(by: String)
+        /// Another deletion of the same remote is under way. Two at once would
+        /// share one reservation, and whichever finished first would release it
+        /// under the other.
+        case deletionInProgress
 
         public var errorDescription: String? {
             switch self {
@@ -496,6 +500,8 @@ public actor ConnectionManager {
                 return "Disconnect \(other) first. It is a connection to the same remote, "
                      + "and deleting the remote would leave that volume with nothing to "
                      + "reconnect to and delete the files it is serving from."
+            case .deletionInProgress:
+                return "This remote is already being deleted."
             }
         }
     }
@@ -612,7 +618,10 @@ public actor ConnectionManager {
         }
 
         // Reserved from here to the end, so nothing can start connecting to it in
-        // any of the awaits below.
+        // any of the awaits below. One reservation per remote: a second deletion
+        // of the same remote is refused rather than sharing the marker, or its
+        // `defer` would release the first's. Codex, on review.
+        guard !deleting.contains(connection.remote) else { throw DeletionRefusal.deletionInProgress }
         deleting.insert(connection.remote)
         defer { deleting.remove(connection.remote) }
 

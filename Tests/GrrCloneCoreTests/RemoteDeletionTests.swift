@@ -368,6 +368,22 @@ final class RemoteDeletionTests: XCTestCase {
         }
     }
 
+    /// One reservation per remote. A second deletion arriving while the first is
+    /// suspended must not share it — its `defer` would release the first's.
+    func testASecondDeletionOfTheSameRemoteIsRefused() async {
+        let manager = idleManager()
+        await manager.markDeletingForTesting(remote: "dav1")
+        do {
+            _ = try await manager.deleteRemote(Connection(remote: "dav1"),
+                                               configPath: dir.appendingPathComponent("rclone.conf").path)
+            XCTFail("must refuse")
+        } catch let refusal as ConnectionManager.DeletionRefusal {
+            XCTAssertEqual(refusal, .deletionInProgress)
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
+
     /// The last check and `config/delete` are not one step: the await between
     /// them releases the actor. A connect that lands in that gap is refused
     /// because the remote is reserved for the deletion — before the daemon is
