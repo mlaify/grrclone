@@ -509,12 +509,43 @@ public actor ConnectionManager {
     ///
     /// Exposed so the confirmation dialog can show the real obstacle before the user
     /// commits, rather than letting them type a name and then be told no.
+    ///
+    /// Scanned for the **whole remote**, not this connection's folder. Deleting the
+    /// remote's configuration orphans every cache under it — a disconnected
+    /// `dav1:documents` sibling's unsent files as much as `dav1:photos`'s own — and
+    /// the sibling connections are removed with the remote, so nothing would ever
+    /// resume them. Codex caught the first version scanning only the subtree.
     public func pendingUploads(for connection: Connection) async -> PendingUploads {
         guard let root = try? await rcloneCacheRoot() else {
             return PendingUploads(inspectionFailed: true)
         }
-        return VFSCache.pendingUploads(cacheRoot: root, fsSpec: connection.fsSpec)
+        return VFSCache.pendingUploads(cacheRoot: root, fsSpec: Self.deletionScope(of: connection))
     }
+
+    /// The filesystem whose cache a deletion must account for and remove: the
+    /// remote as a whole, since that is what `config/delete` takes away.
+    static func deletionScope(of connection: Connection) -> String { "\(connection.remote):" }
+
+    /// A live or in-progress mount of another connection to the same remote.
+    ///
+    /// In-progress ones too: `connect()` holds `connecting` between `serve/start`
+    /// and the assignment into `active`, and actor reentrancy lets a deletion run
+    /// inside those awaits. Searching `active` alone would delete the configuration
+    /// under a mount that is being established. Codex found that on review.
+    private func sibling(of connection: Connection) -> String? {
+        if let live = active.values.first(where: {
+            $0.connection.id != connection.id && $0.connection.remote == connection.remote
+        }) {
+            return live.connection.displayName
+        }
+        if connecting.contains(where: { $0.hasPrefix("\(connection.remote):") && $0 != connection.fsSpec }) {
+            return "a connection to \(connection.remote) that is still connecting"
+        }
+        return nil
+    }
+
+    /// Test seam: mark a filesystem as mid-connect without a daemon.
+    func markConnectingForTesting(fsSpec: String) { connecting.insert(fsSpec) }
 
     /// Remove a remote from rclone's configuration, and grrclone's cache of it.
     ///
@@ -544,15 +575,13 @@ public actor ConnectionManager {
     public func deleteRemote(_ connection: Connection,
                              configPath: String,
                              force: Bool = false) async throws -> DeletionOutcome {
-        // Before touching the daemon: is another connection to this remote mounted?
-        // Only this connection's own mount is brought down below; a sibling's would
-        // stay up on a remote that no longer exists in the configuration, and the
-        // cache purge at the end would take its files — the subpath cache sits
-        // inside the remote's (#114).
-        if let sibling = active.values.first(where: {
-            $0.connection.id != connection.id && $0.connection.remote == connection.remote
-        }) {
-            throw DeletionRefusal.remoteInUse(by: sibling.connection.displayName)
+        // Before touching the daemon: is another connection to this remote mounted,
+        // or on its way? Only this connection's own mount is brought down below; a
+        // sibling's would stay up on a remote that no longer exists in the
+        // configuration, and the cache purge at the end would take its files — the
+        // subpath cache sits inside the remote's (#114).
+        if let sibling = sibling(of: connection) {
+            throw DeletionRefusal.remoteInUse(by: sibling)
         }
 
         let client = try await supervisor.requireClient()
@@ -565,10 +594,10 @@ public actor ConnectionManager {
         }
 
         let cacheRoot = try await rcloneCacheRoot()
+        let scope = Self.deletionScope(of: connection)
 
         if !force {
-            let pending = VFSCache.pendingUploads(cacheRoot: cacheRoot,
-                                                  fsSpec: connection.fsSpec)
+            let pending = VFSCache.pendingUploads(cacheRoot: cacheRoot, fsSpec: scope)
             if pending.inspectionFailed { throw DeletionRefusal.cacheUnreadable }
             if !pending.dirtyFiles.isEmpty {
                 throw DeletionRefusal.pendingUploads(files: pending.dirtyFiles)
@@ -599,13 +628,18 @@ public actor ConnectionManager {
             // the remote is still configured and its cache is untouched, so the write
             // survives and reconnecting will upload it. Only the mount was lost.
             if !force {
-                let after = VFSCache.pendingUploads(cacheRoot: cacheRoot,
-                                                    fsSpec: connection.fsSpec)
+                let after = VFSCache.pendingUploads(cacheRoot: cacheRoot, fsSpec: scope)
                 if after.inspectionFailed { throw DeletionRefusal.cacheUnreadable }
                 if !after.dirtyFiles.isEmpty {
                     throw DeletionRefusal.pendingUploads(files: after.dirtyFiles)
                 }
             }
+        }
+
+        // Once more, right before the configuration goes: the awaits above are
+        // where a sibling could have started connecting.
+        if let sibling = sibling(of: connection) {
+            throw DeletionRefusal.remoteInUse(by: sibling)
         }
 
         let backup = try ConfigBackup.make(configPath: configPath)
@@ -615,9 +649,11 @@ public actor ConnectionManager {
         // from the configuration by this point; a cache directory that could not be
         // removed is disk space, not a correctness problem, and reporting the whole
         // operation as failed would be wrong.
+        // The whole remote's cache, matching the scan above: the configuration it
+        // belonged to is gone, and so are the sibling connections.
         var purged = true
         do {
-            try VFSCache.purge(cacheRoot: cacheRoot, fsSpec: connection.fsSpec)
+            try VFSCache.purge(cacheRoot: cacheRoot, fsSpec: scope)
         } catch {
             purged = false
         }

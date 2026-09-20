@@ -347,6 +347,39 @@ final class RemoteDeletionTests: XCTestCase {
         }
     }
 
+    /// A sibling that is between `serve/start` and `active` is invisible to a
+    /// search of `active`; the refusal has to see it too.
+    func testDeletingARemoteIsRefusedWhileASiblingIsStillConnecting() async {
+        let manager = idleManager()
+        await manager.markConnectingForTesting(fsSpec: "dav1:documents")
+        let whole = Connection(remote: "dav1", displayName: "Cloud")
+
+        do {
+            _ = try await manager.deleteRemote(whole, configPath: dir.appendingPathComponent("rclone.conf").path)
+            XCTFail("must refuse")
+        } catch let refusal as ConnectionManager.DeletionRefusal {
+            guard case .remoteInUse(let who) = refusal else { return XCTFail("\(refusal)") }
+            XCTAssertTrue(who.contains("still connecting"), who)
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+    }
+
+    /// Deleting from `dav1:photos` takes the whole of `dav1` away, so a dirty file
+    /// in a disconnected `dav1:documents` sibling is just as lost. The scan and
+    /// the purge both cover the remote, not the folder.
+    func testDeletionScopeIsTheWholeRemote() throws {
+        let photos = Connection(remote: "dav1", path: "photos")
+        XCTAssertEqual(ConnectionManager.deletionScope(of: photos), "dav1:")
+
+        try writeMeta(fs: "dav1:documents", path: "report.docx", dirty: true)
+        let ownFolder = VFSCache.pendingUploads(cacheRoot: cacheRoot, fsSpec: photos.fsSpec)
+        XCTAssertTrue(ownFolder.dirtyFiles.isEmpty, "the folder's own scan cannot see the sibling's file")
+        let scope = VFSCache.pendingUploads(cacheRoot: cacheRoot,
+                                            fsSpec: ConnectionManager.deletionScope(of: photos))
+        XCTAssertEqual(scope.dirtyFiles, ["documents/report.docx"], "the deletion scan must")
+    }
+
     /// A differing subpath means a different cache, so they do not interfere.
     func testDifferentSubpathsDoNotShareACache() {
         let a = Connection(remote: "dav1", path: "photos")
