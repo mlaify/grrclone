@@ -31,6 +31,13 @@ final class AppModel: ObservableObject {
     /// dismisses it: a transient status line is the wrong shape for the one case
     /// where their data may actually have been affected.
     @Published private(set) var uncleanShutdown: UncleanShutdownReport?
+    /// Set when the list of connections could not be read at launch. Its own
+    /// notice, not `lastError`: it names where the user's settings went, and the
+    /// startup errors that follow — no rclone, a daemon that will not start —
+    /// overwrite `lastError` before it is ever rendered. By the next launch the
+    /// original file is already moved and its location gone with it. Stays until
+    /// dismissed. Codex found the overwrite on review.
+    @Published private(set) var storeRecoveryNotice: String?
 
     // MARK: Updates
 
@@ -314,16 +321,18 @@ final class AppModel: ObservableObject {
     private func reportStoreLoadFailure() async {
         guard let failure = await store.loadFailure else { return }
         if let aside = failure.quarantinedAt {
-            lastError = "grrclone could not read its list of connections "
+            storeRecoveryNotice = "grrclone could not read its list of connections "
                       + "(\(failure.reason)). The file was moved to \(aside.path) and "
                       + "your remotes have been set up again with default settings."
         } else {
-            lastError = "grrclone could not read its list of connections "
+            storeRecoveryNotice = "grrclone could not read its list of connections "
                       + "(\(failure.reason)) and could not move the file aside, so it "
                       + "will not save anything over it. Repair or move the file, "
                       + "then relaunch."
         }
     }
+
+    func dismissStoreRecoveryNotice() { storeRecoveryNotice = nil }
 
     /// Adopt, and say so when it could not be saved. A `try?` here meant a remote
     /// that could not be persisted simply never appeared, with nothing to explain
