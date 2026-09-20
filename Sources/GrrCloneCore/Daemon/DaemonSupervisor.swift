@@ -126,10 +126,16 @@ public actor DaemonSupervisor {
         try fm.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true,
                                attributes: [.posixPermissions: 0o700])
 
-        // Read the previous session before starting a new one, or begin() overwrites
-        // the only evidence that the last shutdown was unclean.
+        // Read the previous session now; begin the new one only once this start has
+        // succeeded, at the very end. The first version began it here, and every
+        // throw below — an orphan that could not be identified, mounts that would
+        // not come down, a binary too old, a socket that never appeared — then
+        // left a fresh marker with no mount points in it. The caller never read
+        // `previousSession` because start() had thrown, and on the retry the
+        // marker said a session had begun and lost nothing: the one reassurance
+        // this record exists to withhold, given for a crash that had left local
+        // files in a mount point (#117).
         previousSession = session.previousSession()
-        session.begin()
 
         // Deal with a daemon left behind by an unclean shutdown before claiming the
         // socket. Skipping this would orphan it: we would delete the socket it is
@@ -288,6 +294,8 @@ public actor DaemonSupervisor {
         try? pidFile.write(pid: process.processIdentifier, socketPath: socket)
         self.client = client
         self.socketPath = socket
+        // Last, after everything that can throw: from here the session is real.
+        session.begin()
         startedCleanly = true
         return client
     }

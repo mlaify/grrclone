@@ -186,9 +186,27 @@ final class AppModel: ObservableObject {
             let client = try await supervisor.start()
 
             // Clear anything a previous unclean shutdown left behind before the user can
-            // act on stale state.
-            if let report = try? await manager.reconcileOrphans(), !report.cleaned.isEmpty {
-                status = "Recovered \(report.cleaned.count) mount(s) from a previous session"
+            // act on stale state — and say what could not be cleared. `stillMounted`
+            // was dropped here, so a recorded volume that would not unmount (a dead
+            // server, no orphan daemon to name it) went unmentioned and connect-at-
+            // login ran straight into its path (#117).
+            if let report = try? await manager.reconcileOrphans() {
+                if !report.cleaned.isEmpty {
+                    status = "Recovered \(report.cleaned.count) mount(s) from a previous session"
+                }
+                blockedMountPoints = Set(report.stillMounted)
+                if report.tableUnreadable {
+                    lastError = "grrclone could not read the list of mounted volumes, so it "
+                              + "cannot tell whether the \(report.stillMounted.count) volume(s) "
+                              + "from the previous session are still up. It will not connect "
+                              + "them until it can."
+                } else if !report.stillMounted.isEmpty {
+                    lastError = "\(report.stillMounted.count) volume(s) from the previous "
+                              + "session could not be disconnected: "
+                              + report.stillMounted.joined(separator: ", ")
+                              + ". Run `umount -f <path>` for each, once per layer, then "
+                              + "connect again. They will not be connected at login until then."
+                }
             }
 
             // Reported rather than fixed silently. Recovery already happens — orphans
@@ -1276,11 +1294,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Mount points reconciliation could not clear at launch. A connection whose
+    /// folder is one of these is not connected at login: its path already has a
+    /// volume on it, and the attempt would fail — or, before #108, stack.
+    @Published private(set) var blockedMountPoints: Set<String> = []
+
     /// Connect everything marked "connect at login". Runs at launch, after
     /// reconciliation has cleared any stale mounts from a previous session.
     func connectLoginItems() async {
         guard daemonReady else { return }
         for row in rows where row.connection.connectAtLogin && !row.state.isMounted {
+            let folder = mountRoot.appendingPathComponent(row.connection.displayName).path
+            if blockedMountPoints.contains(folder) { continue }
             connect(row.connection)
         }
     }

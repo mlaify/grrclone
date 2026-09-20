@@ -89,6 +89,38 @@ final class SessionMarkerTests: XCTestCase {
         XCTAssertNil(marker.previousSession(), "a cleared marker must read as a clean exit")
     }
 
+    /// A start that fails must not touch the previous session's record. It used to
+    /// begin the new session before anything could throw, so a launch refused for
+    /// an orphan it could not identify — or, as here, a binary that is not rclone —
+    /// overwrote the crash record with an empty one, and the retry reported that
+    /// nothing had been lost (#117).
+    func testAFailedStartLeavesThePreviousSessionsRecordIntact() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grrclone-session-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let marker = SessionMarker(url: SessionMarker.defaultURL(runtimeDirectory: dir))
+        marker.begin()
+        marker.update(mountPoints: ["/Users/x/Cloud"])
+
+        // Exists and is executable, exits at once, never opens the socket.
+        let supervisor = DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/true"),
+                                          runtimeDirectory: dir)
+        do {
+            _ = try await supervisor.start()
+            XCTFail("/usr/bin/true is not an rclone daemon; start must throw")
+        } catch {
+            // expected
+        }
+
+        let record = marker.previousSession()
+        XCTAssertEqual(record?.mountPoints, ["/Users/x/Cloud"],
+                       "the crash record must survive a start that failed")
+        let seen = await supervisor.previousSession
+        XCTAssertEqual(seen?.mountPoints, ["/Users/x/Cloud"], "and be what the caller is shown")
+    }
+
     func testAnInterruptedSessionIsDetected() {
         let marker = SessionMarker(url: url)
         marker.begin()
