@@ -264,7 +264,8 @@ final class DaemonLogBufferTests: XCTestCase {
         let stored = await log.recent.map(\.text)
         XCTAssertFalse(stored.joined().contains(secret), "the tail leaked past a line from the other pipe: \(stored)")
         XCTAssertTrue(stored.contains("NOTICE : stdout says hello"), "the other pipe's line is kept intact")
-        XCTAssertTrue(stored.contains("NOTICE : stderr after"), "dropping stops at stderr's own newline")
+        XCTAssertTrue(stored.contains("2026/09/19 16:29:00 NOTICE : stderr after"),
+                      "dropping stops at stderr's own next record: \(stored)")
     }
 
     /// Ordinary interleaving, with nothing sensitive: each stream's partial line is
