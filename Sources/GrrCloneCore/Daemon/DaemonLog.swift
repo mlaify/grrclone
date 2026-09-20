@@ -39,16 +39,18 @@ public actor DaemonLog {
 
     private struct StreamState {
         var partial = ""
-        /// True while the rest of an over-long *sensitive* line is still arriving.
+        /// True from a sensitive trace until the next line that starts a record.
         ///
-        /// A line longer than the flush limit is recorded in fragments. The first
-        /// fragment carries the `rc: "config/…"` prefix and is redacted by it; the
-        /// later ones do not, and would have been stored as ordinary text — which
-        /// for a `config/dump` reply on a large configuration, or a service-account
-        /// JSON blob, is most of the secret. So once a flushed fragment is a
-        /// sensitive trace, everything up to its newline is dropped rather than
-        /// stored.
-        var droppingRestOfSensitiveLine = false
+        /// A trace is one *record* but not always one *line*. It is recorded in
+        /// fragments when it is longer than the flush limit, and it spans physical
+        /// lines when a value holds newlines — a PEM private key, a service-account
+        /// JSON blob. Only the first piece carries the `rc: "config/…"` prefix that
+        /// redacts it; every later piece would have been stored as ordinary text,
+        /// which is most of the secret. So once a piece is a sensitive trace,
+        /// everything after it is dropped until a piece that begins a new record —
+        /// rclone starts each one with a timestamp — rather than stored. Codex
+        /// found the fragment case and then the multi-line case.
+        var insideSensitiveRecord = false
     }
     private var streams: [Stream: StreamState] = [:]
 
@@ -71,24 +73,21 @@ public actor DaemonLog {
         var pieces = state.partial.components(separatedBy: "\n")
         state.partial = pieces.removeLast()
 
-        for (index, piece) in pieces.enumerated() {
-            if index == 0 && state.droppingRestOfSensitiveLine {
-                // The tail of a line whose head was already flushed and redacted.
-                state.droppingRestOfSensitiveLine = false
-                continue
-            }
-            if !piece.trimmingCharacters(in: .whitespaces).isEmpty { record(piece) }
+        for piece in pieces {
+            if state.insideSensitiveRecord && !Self.startsARecord(piece) { continue }
+            state.insideSensitiveRecord = false
+            guard !piece.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            record(piece)   // redacted by its prefix if it is a trace
+            if Self.isSensitiveTrace(piece) { state.insideSensitiveRecord = true }
         }
 
-        // A very long line with no newline must not grow without bound.
+        // A very long line with no newline must not grow without bound. A flushed
+        // fragment is either the start of a record or the middle of a line, never a
+        // new record's start, so inside a sensitive record it is always dropped.
         if state.partial.count > Self.flushLimit {
-            if state.droppingRestOfSensitiveLine {
-                // Still inside the same sensitive line; keep dropping.
-            } else if Self.isSensitiveTrace(state.partial) {
-                record(state.partial)   // redacted by its prefix
-                state.droppingRestOfSensitiveLine = true
-            } else {
+            if !state.insideSensitiveRecord {
                 record(state.partial)
+                if Self.isSensitiveTrace(state.partial) { state.insideSensitiveRecord = true }
             }
             state.partial = ""
         }
@@ -96,6 +95,13 @@ public actor DaemonLog {
 
     /// Characters an unterminated line may reach before it is flushed in pieces.
     static let flushLimit = 8192
+
+    /// Whether a piece begins a new log record, as against continuing the previous
+    /// one across a newline inside a value. rclone prefixes every record with a
+    /// timestamp; a continuation line of a multi-line value has none.
+    static func startsARecord(_ piece: String) -> Bool {
+        piece.range(of: "^\\d{4}/\\d{2}/\\d{2} \\d{2}:\\d{2}:\\d{2}", options: .regularExpression) != nil
+    }
 
     /// Whether a fragment begins a line whose payload must not be stored in
     /// pieces. An rc trace always carries its method within the first few dozen
