@@ -169,6 +169,9 @@ extension ConnectionStoreTests {
         }
         XCTAssertEqual(Connection.folderKey("Cloud"), Connection.folderKey("cLOUD"))
         XCTAssertNotEqual(Connection.folderKey("Cloud"), Connection.folderKey("Clouds"))
+        // Full case folding, not lowercasing: long s folds to s.
+        XCTAssertEqual(Connection.folderKey("\u{017F}hare"), Connection.folderKey("Share"))
+        XCTAssertEqual(Connection.folderKey("STRASSE"), Connection.folderKey("strasse"))
     }
 
     /// Adoption's disambiguation uses the same key, or it would hand out `cloud`

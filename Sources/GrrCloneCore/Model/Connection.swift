@@ -61,7 +61,10 @@ public struct Connection: Codable, Sendable, Identifiable, Equatable {
     /// because the cost of that is a renamed connection and the cost of the other
     /// mistake is a stacked mount (#112, Codex review).
     public static func folderKey(_ name: String) -> String {
-        name.decomposedStringWithCanonicalMapping.lowercased()
+        // Unicode case folding, not `lowercased()`: `ſ` (long s) lowercases to
+        // itself but folds to `s`, so `ſhare` and `Share` are one folder on a
+        // case-insensitive volume and were two to a lowercase key. Codex again.
+        name.decomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
     }
 
     /// Keep a subpath usable as the right-hand side of `remote:path`.
