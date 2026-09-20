@@ -30,7 +30,11 @@ public actor ConnectionManager {
     /// mount have both returned. Between those points a connection is serving files
     /// and appears in neither place, which is long enough for something else to
     /// decide its cache is idle.
-    private var connecting: Set<String> = []
+    /// Keyed by connection, not by filesystem. Two stored connections with one
+    /// `fsSpec` connected together would otherwise share a single marker, and the
+    /// first to finish would remove it while the other was still mounting — which
+    /// a deletion starting then could not see. Codex found that on review.
+    private var connecting: [UUID: String] = [:]
 
     /// Remotes whose configuration is being deleted right now.
     ///
@@ -161,8 +165,8 @@ public actor ConnectionManager {
         // releases the actor, and a deletion arriving in that gap saw no sibling,
         // reserved the remote, and passed its final check while this connect was
         // about to start a server. Codex found that on the third review.
-        connecting.insert(connection.fsSpec)
-        defer { connecting.remove(connection.fsSpec) }
+        connecting[connection.id] = connection.fsSpec
+        defer { connecting[connection.id] = nil }
 
         let client = try await supervisor.start()
 
@@ -419,7 +423,7 @@ public actor ConnectionManager {
     /// the mount table yet.
     func isServing(fsSpec: String) -> Bool {
         servingMount(overlapping: fsSpec) != nil
-            || connecting.contains { VFSCache.cachesOverlap($0, fsSpec) }
+            || connecting.values.contains { VFSCache.cachesOverlap($0, fsSpec) }
     }
 
     /// The live mount, if any, whose cache overlaps `fsSpec`.
@@ -559,7 +563,7 @@ public actor ConnectionManager {
         // included: a mount being established is a mount. The first version
         // excluded the deleted connection's own fsSpec, which also excluded a
         // twin on the same path.
-        if connecting.contains(where: { $0.hasPrefix("\(connection.remote):") }) {
+        if connecting.values.contains(where: { $0.hasPrefix("\(connection.remote):") }) {
             return "a connection to \(connection.remote) that is still connecting"
         }
         return nil
@@ -567,7 +571,7 @@ public actor ConnectionManager {
 
     /// Test seams: mark a filesystem as mid-connect, or a remote as mid-delete,
     /// without a daemon.
-    func markConnectingForTesting(fsSpec: String) { connecting.insert(fsSpec) }
+    func markConnectingForTesting(fsSpec: String) { connecting[UUID()] = fsSpec }
     func markDeletingForTesting(remote: String) { deleting.insert(remote) }
 
     /// Remove a remote from rclone's configuration, and grrclone's cache of it.
