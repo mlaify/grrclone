@@ -129,8 +129,16 @@ public actor ConnectionStore {
     }
 
     public func remove(id: UUID) throws {
+        try remove(ids: [id])
+    }
+
+    /// Remove several at once, as one write. Deleting a remote removes every
+    /// connection that used it; done one at a time, a write that failed part way
+    /// left the rest pointing at configuration that no longer existed, with the
+    /// status claiming they were gone. Codex found that on review.
+    public func remove(ids: Set<UUID>) throws {
         var updated = connections
-        updated.removeAll { $0.id == id }
+        updated.removeAll { ids.contains($0.id) }
         try commit(updated)
     }
 

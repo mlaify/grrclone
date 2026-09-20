@@ -54,6 +54,13 @@ struct DeleteRemoteSheet: View {
                 bullet("the saved credentials for this remote")
                 bullet("its settings in grrclone")
                 bullet("its local cache")
+                // Said here, where it can still be declined. The other connections
+                // to this remote lose their names, folders and options with it.
+                if !model.siblingsOfDeleting.isEmpty {
+                    bullet("the other connection\(model.siblingsOfDeleting.count == 1 ? "" : "s")"
+                           + " that use the same remote: "
+                           + model.siblingsOfDeleting.map(\.displayName).joined(separator: ", "))
+                }
                 Text("To use it again you would set it up from scratch, including "
                      + "signing in again in a browser if it uses one.")
                 .font(.caption).foregroundStyle(.secondary)

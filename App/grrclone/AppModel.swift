@@ -677,6 +677,16 @@ final class AppModel: ObservableObject {
     /// What the cache says is still waiting to upload, for the sheet to show.
     @Published private(set) var deletionPending: PendingUploads?
 
+    /// The other saved connections to the remote being deleted. They go with it,
+    /// so the confirmation has to say so before the person confirms — the first
+    /// version listed them only in the status afterwards. Codex, on review.
+    var siblingsOfDeleting: [Connection] {
+        guard let deleting = deletingConnection else { return [] }
+        return rows.map(\.connection)
+            .filter { $0.id != deleting.id && $0.remote == deleting.remote }
+            .sorted { $0.displayName < $1.displayName }
+    }
+
     /// Open the confirmation, and look at the cache while it opens.
     ///
     /// The obstacle is discovered before the user commits rather than after. Making
@@ -742,11 +752,10 @@ final class AppModel: ObservableObject {
             }
             var storeWarning = ""
             do {
-                try await store.remove(id: connection.id)
-                for sibling in siblings {
-                    try await store.remove(id: sibling.id)
-                    needsRemount.remove(sibling.id)
-                }
+                // One write for all of them: a failure part way through would
+                // otherwise leave some pointing at configuration that is gone.
+                try await store.remove(ids: Set([connection.id] + siblings.map(\.id)))
+                for sibling in siblings { needsRemount.remove(sibling.id) }
             } catch {
                 storeWarning = " grrclone could not update its own list of connections, "
                              + "so \(connection.displayName) may reappear until you "
