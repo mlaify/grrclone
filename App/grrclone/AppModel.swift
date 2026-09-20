@@ -214,7 +214,18 @@ final class AppModel: ObservableObject {
             // where the user's own data may be involved, and they cannot check
             // something nobody told them about.
             if let previous = await supervisor.previousSession {
-                uncleanShutdown = UncleanShutdownReport.inspect(previous)
+                // Off the main actor, under a deadline, and never on a path that is
+                // still mounted: those are the ones that block for minutes (#118).
+                if let table = try? await SystemMounts.current() {
+                    uncleanShutdown = await UncleanShutdownReport.inspect(
+                        previous, mountedPaths: Set(table.map(\.mountPoint)))
+                } else {
+                    // Cannot tell which are still mounted, so none can be listed
+                    // safely. Unknown, said as unknown.
+                    uncleanShutdown = UncleanShutdownReport(
+                        previousStart: previous.startedAt, shadowedPaths: [], cleanPaths: [],
+                        unreadablePaths: previous.mountPoints)
+                }
             }
 
             // An encrypted config fails here, not at daemon start: rclone starts
@@ -490,15 +501,24 @@ final class AppModel: ObservableObject {
     /// what is on the server, and guessing wrong overwrites the wrong copy.
     func recoverShadowedData() {
         guard let report = uncleanShutdown else { return }
-        var recovered: [String] = []
-        for path in report.shadowedPaths {
-            do { recovered.append(try UncleanShutdownReport.recover(path: path).path) }
-            catch { lastError = "Could not move \(path): \(error.localizedDescription)" }
-        }
-        if !recovered.isEmpty {
-            status = "Moved local data aside from \(recovered.count) folder(s)"
-        }
+        let paths = report.shadowedPaths
         uncleanShutdown = nil
+        // Filesystem work, off the main actor. These paths were listed a moment
+        // ago and are not mounted, so this is quick — but not on the UI thread.
+        Task.detached {
+            var recovered: [String] = []
+            var failures: [String] = []
+            for path in paths {
+                do { recovered.append(try UncleanShutdownReport.recover(path: path).path) }
+                catch { failures.append("Could not move \(path): \(error.localizedDescription)") }
+            }
+            await MainActor.run {
+                if let failure = failures.first { self.lastError = failure }
+                if !recovered.isEmpty {
+                    self.status = "Moved local data aside from \(recovered.count) folder(s)"
+                }
+            }
+        }
     }
 
     func dismissUncleanShutdown() { uncleanShutdown = nil }
@@ -580,8 +600,8 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            try ConfigEncryption.encrypt(rclone: binary, configPath: configPath,
-                                         password: password)
+            try await ConfigEncryption.encrypt(rclone: binary, configPath: configPath,
+                                               password: password)
             try await client.unlockConfig(password: password)
 
             configIsEncryptedOnDisk = true

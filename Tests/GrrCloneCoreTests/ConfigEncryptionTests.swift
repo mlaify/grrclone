@@ -51,12 +51,12 @@ final class ConfigEncryptionTests: XCTestCase {
         XCTAssertFalse(ConfigEncryption.isEncrypted(configPath: dir.appendingPathComponent("nope").path))
     }
 
-    func testEncryptingMakesTheCredentialsUnreadable() throws {
+    func testEncryptingMakesTheCredentialsUnreadable() async throws {
         let rclone = try requireRclone()
         try "[dav]\ntype = webdav\npass = obscuredvalue\n"
             .write(toFile: config, atomically: true, encoding: .utf8)
 
-        try ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "a-test-password")
+        try await ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "a-test-password")
 
         XCTAssertTrue(ConfigEncryption.isEncrypted(configPath: config))
         let contents = try String(contentsOfFile: config, encoding: .utf8)
@@ -68,13 +68,14 @@ final class ConfigEncryptionTests: XCTestCase {
 
     /// Encrypting an already-encrypted config would prompt for the *old* password and
     /// hang on a pipe that will never answer it.
-    func testRefusesToEncryptTwice() throws {
+    func testRefusesToEncryptTwice() async throws {
         let rclone = try requireRclone()
-        try ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "first")
+        try await ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "first")
 
-        XCTAssertThrowsError(
-            try ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "second")
-        ) { error in
+        do {
+            try await ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "second")
+            XCTFail("a second encryption must be refused")
+        } catch {
             guard case ConfigEncryption.Failure.alreadyEncrypted = error else {
                 return XCTFail("expected alreadyEncrypted, got \(error)")
             }
@@ -84,9 +85,9 @@ final class ConfigEncryptionTests: XCTestCase {
     /// The failure that matters most: reporting success while leaving the credentials
     /// readable would have the user believe they are protected when they are not. The
     /// check is on the file, not the exit status.
-    func testSuccessIsDecidedByTheFileNotTheExitStatus() throws {
+    func testSuccessIsDecidedByTheFileNotTheExitStatus() async throws {
         let rclone = try requireRclone()
-        try ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "pw")
+        try await ConfigEncryption.encrypt(rclone: rclone, configPath: config, password: "pw")
         XCTAssertTrue(ConfigEncryption.isEncrypted(configPath: config))
 
         // And the detection is not fooled by the word appearing in ordinary content.

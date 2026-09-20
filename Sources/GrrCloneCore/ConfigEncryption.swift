@@ -1,4 +1,5 @@
 import Foundation
+import RcloneRC
 
 /// Turning on encryption for `rclone.conf`.
 ///
@@ -80,7 +81,13 @@ public enum ConfigEncryption {
     /// Safe to do with mounts up: verified against a live daemon, which kept answering
     /// from its in-memory copy and did not drop anything. The caller should still hand
     /// the password to the running daemon afterwards, so a later re-read does not fail.
-    public static func encrypt(rclone: URL, configPath: String, password: String) throws {
+    ///
+    /// Async, and bounded. The process is driven from a Dispatch thread under a
+    /// deadline, so a caller on the main actor is never blocked by it, and an
+    /// rclone that asks an unexpected question on stdin — which this would wait on
+    /// forever — is terminated and reported instead (#118).
+    public static func encrypt(rclone: URL, configPath: String, password: String,
+                               timeout: TimeInterval = 60) async throws {
         // Refuse rather than guess. An empty path would become `rclone --config ""`,
         // which aims a real password at an unintended target; an unreadable one means
         // we cannot know whether we are about to double-encrypt. See #79, #80.
@@ -104,15 +111,21 @@ public enum ConfigEncryption {
 
         // Asked for twice: once to set, once to confirm.
         let answer = Data("\(password)\n\(password)\n".utf8)
-        input.fileHandleForWriting.write(answer)
-        try? input.fileHandleForWriting.close()
+        let finished: (status: Int32, detail: String)? = await Deadline.run(seconds: timeout) {
+            input.fileHandleForWriting.write(answer)
+            try? input.fileHandleForWriting.close()
+            let detail = String(data: (try? output.fileHandleForReading.readToEnd()) ?? Data(),
+                                encoding: .utf8) ?? ""
+            process.waitUntilExit()
+            return (process.terminationStatus, detail)
+        }
+        guard let finished else {
+            process.terminate()
+            throw Failure.commandFailed("rclone did not finish within \(Int(timeout))s")
+        }
 
-        let detail = String(data: (try? output.fileHandleForReading.readToEnd()) ?? Data(),
-                            encoding: .utf8) ?? ""
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            throw Failure.commandFailed(detail.isEmpty ? "exit \(process.terminationStatus)" : detail)
+        guard finished.status == 0 else {
+            throw Failure.commandFailed(finished.detail.isEmpty ? "exit \(finished.status)" : finished.detail)
         }
 
         // Check the file rather than the exit status. An encryption step that reports

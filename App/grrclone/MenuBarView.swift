@@ -139,13 +139,7 @@ struct MenuBarView: View {
                          ? "grrclone did not shut down cleanly, and found local files"
                          : "grrclone did not shut down cleanly")
                         .font(.caption.weight(.medium))
-                    Text(report.needsAttention
-                         ? "Something wrote into \(report.shadowedPaths.count) "
-                           + "connection folder(s) while nothing was mounted there. "
-                           + "Those files are on this Mac and would be hidden by the "
-                           + "next connection."
-                         : "Mounts and the rclone process were cleaned up. Nothing "
-                           + "appears to have been lost.")
+                    Text(uncleanDetail(report))
                         .font(.caption2).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -190,6 +184,27 @@ struct MenuBarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// What the crash left, in one sentence, including the folders that could not
+    /// be checked — unknown is said as unknown, not as fine.
+    private func uncleanDetail(_ report: UncleanShutdownReport) -> String {
+        var parts: [String] = []
+        if !report.shadowedPaths.isEmpty {
+            parts.append("Something wrote into \(report.shadowedPaths.count) connection "
+                         + "folder(s) while nothing was mounted there. Those files are on "
+                         + "this Mac and would be hidden by the next connection.")
+        }
+        if !report.unreadablePaths.isEmpty {
+            parts.append("\(report.unreadablePaths.count) folder(s) could not be checked "
+                         + "in time and may hold local files: "
+                         + report.unreadablePaths.joined(separator: ", ") + ".")
+        }
+        if parts.isEmpty {
+            parts.append("Mounts and the rclone process were cleaned up. Nothing appears "
+                         + "to have been lost.")
+        }
+        return parts.joined(separator: " ")
     }
 
     private var header: some View {
