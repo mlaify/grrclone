@@ -30,6 +30,11 @@ struct MenuBarView: View {
                 Divider()
             }
 
+            if let notice = model.storeRecoveryNotice {
+                storeRecoveryNotice(notice)
+                Divider()
+            }
+
             if model.rows.isEmpty {
                 empty
             } else {
@@ -155,6 +160,31 @@ struct MenuBarView: View {
                               + "so the connection can mount without hiding them")
                 }
                 Button("Dismiss") { model.dismissUncleanShutdown() }
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// Where the user's connection settings went when the file could not be read.
+    ///
+    /// Persistent and separate from the error line, which startup overwrites before
+    /// it can be seen. The path is selectable: it is the one thing the person needs
+    /// to copy.
+    private func storeRecoveryNotice(_ notice: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "doc.badge.gearshape")
+                    .foregroundStyle(.orange)
+                Text(notice)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            HStack {
+                Spacer()
+                Button("Dismiss") { model.dismissStoreRecoveryNotice() }
                     .controlSize(.small)
             }
         }
