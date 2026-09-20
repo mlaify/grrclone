@@ -50,6 +50,9 @@ public actor DaemonSupervisor {
     private let settings: DaemonSettings
     private var process: Process?
     private var pipes: [Pipe] = []
+    /// One per drained pipe; finished when draining stops so the consumer task
+    /// ends rather than waiting forever on a pipe nobody reads.
+    private var drains: [AsyncStream<Data>.Continuation] = []
     private var client: RcloneRCClient?
     private let pidFile: DaemonPidFile
     /// Tracks whether this session ended properly. See `SessionMarker`.
@@ -205,13 +208,29 @@ public actor DaemonSupervisor {
         process.standardError = errPipe
         process.standardOutput = outPipe
 
+        // Each pipe is read in order, by one consumer.
+        //
+        // The readability handler runs serially per pipe, but the first version
+        // spawned a fresh `Task { await log.append(...) }` per chunk, and tasks do
+        // not run in the order they were created. Two reads of one sensitive line
+        // could therefore reach the log tail first, head second — and the tail,
+        // with the credential in it, would be recorded before the head had set the
+        // redaction state that drops it. Codex found that on review. An
+        // `AsyncStream` fixes the order: `yield` is synchronous, so chunks enter
+        // the stream in read order, and a single task per pipe appends them in
+        // that order.
         let log = self.log
         for (pipe, stream) in [(errPipe, DaemonLog.Stream.stderr), (outPipe, .stdout)] {
+            let (chunks, feed) = AsyncStream<Data>.makeStream()
+            drains.append(feed)
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
-                guard !data.isEmpty else { return }
-                // Named, so the log assembles each stream's lines on their own.
-                Task { await log.append(data, from: stream) }
+                // Empty means end of file; the handler keeps firing until detached.
+                guard !data.isEmpty else { feed.finish(); return }
+                feed.yield(data)
+            }
+            Task {
+                for await chunk in chunks { await log.append(chunk, from: stream) }
             }
         }
 
@@ -225,7 +244,7 @@ public actor DaemonSupervisor {
             // already owns the pipe, and draining it here as well would race it for
             // the very bytes that explain the failure.
             let detail = await log.recent.suffix(10).map(\.text).joined(separator: "\n")
-            Self.stopDraining([errPipe, outPipe])
+            stopDraining([errPipe, outPipe])
             process.terminate()
             self.process = nil
             throw Failure.didNotStart(detail.isEmpty ? "control socket never appeared" : detail)
@@ -274,7 +293,7 @@ public actor DaemonSupervisor {
             // mount to protect and no reason to wait for a graceful exit.
             kill(process.processIdentifier, SIGKILL)
         }
-        Self.stopDraining(pipes)
+        stopDraining(pipes)
         self.pipes = []
         self.process = nil
         self.client = nil
@@ -338,7 +357,7 @@ public actor DaemonSupervisor {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
-        Self.stopDraining(pipes)
+        stopDraining(pipes)
         pipes = []
         if let socketPath { try? FileManager.default.removeItem(atPath: socketPath) }
         pidFile.clear()
@@ -352,11 +371,14 @@ public actor DaemonSupervisor {
 
     // MARK: - Helpers
 
-    /// Detach the readability handlers. Left attached they keep firing against a
-    /// closed descriptor and hold the closure — and the log — alive after the daemon
-    /// has gone.
-    private static func stopDraining(_ pipes: [Pipe]) {
+    /// Detach the readability handlers and end their consumers. Left attached they
+    /// keep firing against a closed descriptor and hold the closure — and the log —
+    /// alive after the daemon has gone; left unfinished, each consumer task waits
+    /// forever for a chunk that will never come.
+    private func stopDraining(_ pipes: [Pipe]) {
         for pipe in pipes { pipe.fileHandleForReading.readabilityHandler = nil }
+        for feed in drains { feed.finish() }
+        drains = []
     }
 
     /// Throws rather than degrading. A discarded status here leaves the buffer as the
