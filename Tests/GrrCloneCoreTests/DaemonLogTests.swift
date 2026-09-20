@@ -284,6 +284,38 @@ final class DaemonLogBufferTests: XCTestCase {
         XCTAssertTrue(stored.contains("2026/09/20 10:00:00 NOTICE : new daemon starting"))
     }
 
+    /// A record boundary needs the whole shape — timestamp, level, separator. A
+    /// value that merely contains a date on its own line is still inside the
+    /// trace. (A value crafted to contain the full shape would end it; that is a
+    /// documented limit of unframed text, with the key patterns as the second
+    /// layer.)
+    func testADateInsideAValueIsNotARecordBoundary() async {
+        let log = DaemonLog()
+        let secret = "AFTER-DATE-SECRET-\(UUID().uuidString)"
+        let trace = "2026/09/19 16:28:59 DEBUG : rc: \"config/create\": with parameters map[parameters:map[note:issued\n"
+            + "2026/09/19 00:00:00 by the CA\n\(secret)]]\n"
+            + "2026/09/19 16:29:00 NOTICE : next record\n"
+        await log.append(Data(trace.utf8))
+        let stored = await log.recent.map(\.text)
+        XCTAssertFalse(stored.joined().contains(secret), stored.joined(separator: " | "))
+        XCTAssertEqual(stored.last, "2026/09/19 16:29:00 NOTICE : next record")
+        XCTAssertFalse(DaemonLog.startsARecord("2026/09/19 00:00:00 by the CA"))
+        XCTAssertTrue(DaemonLog.startsARecord("2026/09/19 16:29:00 INFO  : Serving NFS"))
+    }
+
+    /// A long diagnostic line arriving straight after a trace is a new record and
+    /// must be kept, even though it is flushed before its newline arrives.
+    func testALongNewRecordAfterATraceIsKept() async {
+        let log = DaemonLog()
+        await log.append(Data("2026/09/19 16:28:59 DEBUG : rc: \"config/unlock\": with parameters map[configPassword:x]\n".utf8))
+        let long = "2026/09/19 16:29:00 ERROR : listing failed " + String(repeating: "x", count: DaemonLog.flushLimit + 10)
+        await log.append(Data(long.utf8))
+        await log.append(Data(" end\n".utf8))
+        let stored = await log.recent.map(\.text)
+        XCTAssertEqual(stored.count, 3, "the redacted trace, the long head, its tail: \(stored.map { $0.prefix(40) })")
+        XCTAssertTrue(stored[1].hasPrefix("2026/09/19 16:29:00 ERROR : listing failed"))
+    }
+
     /// Ordinary interleaving, with nothing sensitive: each stream's partial line is
     /// its own, so a stdout fragment is never glued onto a stderr one.
     func testStreamsAssembleTheirOwnLines() async {

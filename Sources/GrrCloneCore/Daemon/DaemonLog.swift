@@ -99,10 +99,14 @@ public actor DaemonLog {
             if Self.isSensitiveTrace(piece) { state.insideSensitiveRecord = true }
         }
 
-        // A very long line with no newline must not grow without bound. A flushed
-        // fragment is either the start of a record or the middle of a line, never a
-        // new record's start, so inside a sensitive record it is always dropped.
+        // A very long line with no newline must not grow without bound. Inside a
+        // sensitive record a flushed fragment is dropped — unless it is the head of
+        // the *next* record, which a long diagnostic line arriving straight after
+        // a trace would be; that one ends the sensitive record and is kept.
         if state.partial.count > Self.flushLimit {
+            if state.insideSensitiveRecord && Self.startsARecord(state.partial) {
+                state.insideSensitiveRecord = false
+            }
             if !state.insideSensitiveRecord {
                 record(state.partial)
                 if Self.isSensitiveTrace(state.partial) { state.insideSensitiveRecord = true }
@@ -116,9 +120,17 @@ public actor DaemonLog {
 
     /// Whether a piece begins a new log record, as against continuing the previous
     /// one across a newline inside a value. rclone prefixes every record with a
-    /// timestamp; a continuation line of a multi-line value has none.
+    /// timestamp and a level; a continuation line of a multi-line value has neither.
+    ///
+    /// This is a heuristic and cannot be otherwise: rclone's log is unframed text,
+    /// and a value that itself contains a newline followed by exactly this shape
+    /// would be taken for a record boundary. The shape is required in full — date,
+    /// time, level and the ` : ` separator — so that takes a value crafted to look
+    /// like a log line, not merely one containing a date. The fallback key patterns
+    /// in `redact` still apply to whatever follows, as a second layer.
     static func startsARecord(_ piece: String) -> Bool {
-        piece.range(of: "^\\d{4}/\\d{2}/\\d{2} \\d{2}:\\d{2}:\\d{2}", options: .regularExpression) != nil
+        piece.range(of: "^\\d{4}/\\d{2}/\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)? (?:DEBUG|INFO|NOTICE|ERROR|CRITICAL|WARNING) *: ",
+                    options: .regularExpression) != nil
     }
 
     /// Whether a fragment begins a line whose payload must not be stored in
@@ -261,7 +273,7 @@ public actor DaemonLog {
         // `key=value` form. Word-bounded, unlike the list above, because `key` and
         // `pass` are ordinary words: `keychain:` and `bypass:` must not trip this.
         result = result.replacingOccurrences(
-            of: "(?i)\\b((?:pass|key|sas_url|client_id|access_key_id|secret_access_key|key_file_pass|service_principal_file)[\"']?\\s*[:=]\\s*[\"']?)[^\\s,\"'}&\\]]+",
+            of: "(?i)\\b((?:pass|key|private_key|private_key_id|client_email|sas_url|client_id|access_key_id|secret_access_key|key_file_pass|service_principal_file|service_account_credentials|account_key|connection_string)[\"']?\\s*[:=]\\s*[\"']?)[^\\s,\"'}&\\]]+",
             with: "$1***",
             options: .regularExpression)
 

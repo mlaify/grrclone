@@ -241,7 +241,13 @@ public actor DaemonSupervisor {
         }
 
         do { try process.run() }
-        catch { throw Failure.didNotStart(error.localizedDescription) }
+        catch {
+            // The consumers above are already waiting on pipes that will never be
+            // written; end them, or every retry after a persistent launch failure
+            // leaks two tasks and their streams.
+            stopDraining([errPipe, outPipe])
+            throw Failure.didNotStart(error.localizedDescription)
+        }
 
         self.process = process
 
