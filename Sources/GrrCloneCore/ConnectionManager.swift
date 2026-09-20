@@ -21,6 +21,7 @@ public actor ConnectionManager {
     private let cacheRoot: URL
     private let transports: [TransportKind: any MountTransport]
     private let mountTable: SystemMounts.Reader
+    private let fingerprints: NFSFingerprint.Reader
     private var active: [UUID: ActiveMount] = [:]
 
     /// Filesystems with a mount in progress.
@@ -52,12 +53,14 @@ public actor ConnectionManager {
                 registry: MountRegistry,
                 cacheRoot: URL? = nil,
                 transports: [any MountTransport] = [NFSTransport()],
-                mountTable: @escaping SystemMounts.Reader = { try await SystemMounts.current() }) {
+                mountTable: @escaping SystemMounts.Reader = { try await SystemMounts.current() },
+                fingerprints: @escaping NFSFingerprint.Reader = { try await NFSFingerprint.current() }) {
         self.supervisor = supervisor
         self.registry = registry
         self.cacheRoot = cacheRoot ?? Self.defaultCacheRoot()
         self.transports = Dictionary(uniqueKeysWithValues: transports.map { ($0.kind, $0) })
         self.mountTable = mountTable
+        self.fingerprints = fingerprints
     }
 
     /// Teach the supervisor to bring our mounts down before it kills an orphaned
@@ -981,15 +984,79 @@ public actor ConnectionManager {
     }
 
     /// Paths in the mount table that look like ours but are not recorded as owned.
-    /// Reported for diagnostics only — never unmounted. On a machine where the user also
-    /// runs rclone by hand, these are their mounts.
-    public func foreignLookalikes() async -> [ForeignMount] {
+    /// Reported for diagnostics — never unmounted on grrclone's own initiative. On a
+    /// machine where the user also runs rclone by hand, these are their mounts.
+    ///
+    /// Those under `roots` whose every layer carries grrclone's exact fingerprint
+    /// are marked `reclaimable`, which lets the menu *offer* to disconnect them.
+    /// An unreadable fingerprint source marks nothing: unknown is not an offer.
+    public func foreignLookalikes(under roots: [String] = []) async -> [ForeignMount] {
         // Diagnostics only, never acted on, so an unreadable table may read as
         // "nothing to show" here. The safety paths above do not get that latitude.
         let table = (try? await mountTable()) ?? []
         let owned = Set(await registry.all.map(\.mountPoint))
-        return ForeignMount.group(
-            table.filter { $0.isLoopbackNFS && !owned.contains($0.mountPoint) }
-                 .map(\.mountPoint))
+        let paths = table.filter { $0.isLoopbackNFS && !owned.contains($0.mountPoint) }
+                         .map(\.mountPoint)
+        var reclaimable: Set<String> = []
+        if !roots.isEmpty, let prints = try? await fingerprints() {
+            reclaimable = Set(paths.filter {
+                ForeignMount.isReclaimable(path: $0, fingerprints: prints, roots: roots)
+            })
+        }
+        return ForeignMount.group(paths, reclaimable: reclaimable)
+    }
+
+    public enum ReclaimRefusal: Error, LocalizedError, Equatable {
+        case recorded(String)
+        case notFingerprinted(String)
+        case stillMounted(String, layers: Int)
+
+        public var errorDescription: String? {
+            switch self {
+            case .recorded(let path):
+                return "\(path) is one of grrclone's own connections; disconnect it from its row."
+            case .notFingerprinted(let path):
+                return "\(path) does not carry grrclone's mount options, or is outside the "
+                     + "mount folder, so grrclone will not disconnect it."
+            case .stillMounted(let path, let layers):
+                return "\(path) still has \(layers) volume(s) on it after trying. "
+                     + "Run `umount -f \(path)` once per layer."
+            }
+        }
+    }
+
+    /// Disconnect an unrecorded mount the user has confirmed is a leftover of ours.
+    ///
+    /// The gates are checked again here, not trusted from the menu: the table and
+    /// the fingerprints are re-read, and anything that fails them is refused. Then
+    /// the same order as `disconnect` — unmount, one layer per call, until the path
+    /// is clear, then tidy the directory. **Nothing is killed.** A daemon serving a
+    /// fingerprinted mount is by definition not in our pid file, and #95's rule about
+    /// unidentified daemons stands: it is left running. Returns the layers removed.
+    @discardableResult
+    public func reclaimForeignMount(at path: String, under roots: [String]) async throws -> Int {
+        if await registry.owns(mountPoint: path) { throw ReclaimRefusal.recorded(path) }
+        let prints = try await fingerprints()
+        guard ForeignMount.isReclaimable(path: path, fingerprints: prints, roots: roots) else {
+            throw ReclaimRefusal.notFingerprinted(path)
+        }
+        let transport = transports[.nfs] ?? NFSTransport()
+        let layers = try await mountTable().filter { $0.mountPoint == path }.count
+        guard layers > 0 else { return 0 }
+
+        var removed = 0
+        for _ in 0..<layers {
+            do {
+                try await transport.unmount(at: URL(fileURLWithPath: path))
+                removed = layers
+                break
+            } catch MountError.unmountFailed(let why) where why.hasPrefix("Removed one of") {
+                removed += 1   // one layer down, more to go
+            }
+        }
+        let remaining = try await mountTable().filter { $0.mountPoint == path }.count
+        guard remaining == 0 else { throw ReclaimRefusal.stillMounted(path, layers: remaining) }
+        Self.removeIfEmpty(path)
+        return removed
     }
 }

@@ -11,6 +11,16 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Added
+
+- The menu now offers to disconnect a volume that grrclone did not record making
+  but that carries grrclone's exact mount options and sits inside the mount
+  folder — the leftovers an earlier version made before it kept records, which
+  otherwise take `umount -f` once per layer by hand. It is an offer behind a
+  confirmation whose default is Cancel; a volume with different options, or
+  outside the mount folder, gets no button, and nothing is ever stopped or
+  removed alongside it. ([#105](https://github.com/mlaify/grrclone/issues/105))
+
 ### Changed
 
 - The bundled rclone is now Apple Silicon only, like the app that ships it. The
