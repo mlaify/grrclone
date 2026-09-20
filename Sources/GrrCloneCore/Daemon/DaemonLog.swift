@@ -33,8 +33,26 @@ public actor DaemonLog {
     /// for the end of it. Codex found the second case in review — a line from the
     /// other pipe would have cleared the drop flag below and let the real tail of
     /// a sensitive trace through.
-    public enum Stream: Sendable, Hashable {
-        case stdout, stderr
+    public struct Stream: Sendable, Hashable {
+        public enum Kind: Sendable, Hashable { case stdout, stderr }
+        public let kind: Kind
+        /// Which daemon start this stream belongs to.
+        ///
+        /// A restarted supervisor drains new pipes while the previous generation's
+        /// consumers may still be delivering buffered chunks. If both wrote to one
+        /// `.stderr` state, a timestamped line from the new daemon could end a
+        /// sensitive record the old one had not finished, and its tail would be
+        /// stored. Each generation keys its own state instead, so they cannot
+        /// touch. Codex found the restart case on review.
+        public let generation: Int
+
+        public init(kind: Kind, generation: Int = 0) {
+            self.kind = kind
+            self.generation = generation
+        }
+
+        public static let stdout = Stream(kind: .stdout)
+        public static let stderr = Stream(kind: .stderr)
     }
 
     private struct StreamState {
