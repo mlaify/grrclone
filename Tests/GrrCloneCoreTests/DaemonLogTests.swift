@@ -303,6 +303,21 @@ final class DaemonLogBufferTests: XCTestCase {
         XCTAssertTrue(DaemonLog.startsARecord("2026/09/19 16:29:00 INFO  : Serving NFS"))
     }
 
+    /// Clear between two reads of one sensitive trace must not turn its tail into
+    /// an ordinary line.
+    func testClearDoesNotForgetASensitiveRecordInProgress() async {
+        let log = DaemonLog()
+        let secret = "CLEARED-TAIL-SECRET-\(UUID().uuidString)"
+        let head = "2026/09/19 16:28:59 DEBUG : rc: \"config/dump\": reply map[g:map[key:"
+            + String(repeating: "A", count: DaemonLog.flushLimit + 10)
+        await log.append(Data(head.utf8))
+        await log.clear()
+        await log.append(Data("\(secret)]]: <nil>\n2026/09/19 16:29:00 NOTICE : after\n".utf8))
+        let stored = await log.recent.map(\.text)
+        XCTAssertFalse(stored.joined().contains(secret), "the tail leaked across a clear: \(stored)")
+        XCTAssertEqual(stored, ["2026/09/19 16:29:00 NOTICE : after"])
+    }
+
     /// A long diagnostic line arriving straight after a trace is a new record and
     /// must be kept, even though it is flushed before its newline arrives.
     func testALongNewRecordAfterATraceIsKept() async {

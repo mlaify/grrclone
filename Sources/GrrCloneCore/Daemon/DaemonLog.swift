@@ -149,9 +149,14 @@ public actor DaemonLog {
 
     public var recent: [Line] { lines }
 
+    /// Forget what has been shown, not what is still arriving.
+    ///
+    /// The per-stream sensitivity marker survives a clear. Resetting it too let a
+    /// Clear clicked between two reads of one sensitive trace turn its tail into
+    /// an ordinary line: no prefix, no state, stored verbatim. Codex found it.
     public func clear() {
         lines.removeAll()
-        streams = [:]
+        for key in streams.keys { streams[key]?.partial = "" }
     }
 
     /// Remove credentials before a line is stored.
