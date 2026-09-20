@@ -26,6 +26,12 @@ thing was built the way it was, and what was tried and rejected — lives in
   longer erases the record of what the previous session had mounted, which the
   next launch needs to find files written into a mount point while nothing was
   mounted there. ([#117](https://github.com/mlaify/grrclone/issues/117))
+- Launch no longer freezes while grrclone checks the folders a crashed session had
+  mounted. Those are the folders most likely to still be a dead volume, and looking
+  inside one could hang the app for minutes. A folder that is still mounted is now
+  left alone, the rest are checked with a time limit, and one that does not answer is
+  reported as unchecked rather than assumed fine. Encrypting the configuration is
+  bounded the same way. ([#118](https://github.com/mlaify/grrclone/issues/118))
 - Two connections can no longer share a name. The name is also the mount folder, and
   connecting a second connection named like a mounted one used to take over the
   first's ownership record and then forget it, leaving a live volume nothing would

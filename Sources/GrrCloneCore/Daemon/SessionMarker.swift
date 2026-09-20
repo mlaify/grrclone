@@ -1,4 +1,5 @@
 import Foundation
+import RcloneRC
 
 /// Records that a session is in progress, so the next launch can tell whether the
 /// last one ended properly.
@@ -67,11 +68,26 @@ public struct UncleanShutdownReport: Sendable, Equatable {
     public let previousStart: Date
     /// Mountpoints that were live, and now hold data on the local disk where the
     /// volume used to be. This is the case that loses work: the next mount hides it.
-    public let shadowedPaths: [String]
+    public var shadowedPaths: [String]
     /// Mountpoints that were live and are now empty. Nothing to recover.
-    public let cleanPaths: [String]
+    public var cleanPaths: [String]
+    /// Mountpoints that could not be listed within the deadline. Unknown, which is
+    /// not the same as clean, and is said as such.
+    public var unreadablePaths: [String] = []
+    /// Mountpoints that still have a volume on them, so they cannot be holding
+    /// shadowed local files and were not touched. Reconciliation reports these.
+    public var stillMountedPaths: [String] = []
 
-    public var needsAttention: Bool { !shadowedPaths.isEmpty }
+    public init(previousStart: Date, shadowedPaths: [String], cleanPaths: [String],
+                unreadablePaths: [String] = [], stillMountedPaths: [String] = []) {
+        self.previousStart = previousStart
+        self.shadowedPaths = shadowedPaths
+        self.cleanPaths = cleanPaths
+        self.unreadablePaths = unreadablePaths
+        self.stillMountedPaths = stillMountedPaths
+    }
+
+    public var needsAttention: Bool { !shadowedPaths.isEmpty || !unreadablePaths.isEmpty }
 }
 
 extension UncleanShutdownReport {
@@ -100,6 +116,39 @@ extension UncleanShutdownReport {
         return UncleanShutdownReport(previousStart: record.startedAt,
                                      shadowedPaths: shadowed,
                                      cleanPaths: clean)
+    }
+
+    /// Inspect without blocking the caller on a path that may be a wedged mount.
+    ///
+    /// The synchronous `inspect` lists every path in place, and these are exactly
+    /// the paths most likely to still be a dead NFS mount — the ones reconciliation
+    /// could not bring down. A listing there blocks until the soft-mount timeout,
+    /// minutes, and the first version did it on the main actor at launch (#118).
+    /// So: a path the mount table still lists is skipped outright, since a mounted
+    /// path cannot be holding shadowed local files; every other listing runs under
+    /// a deadline, and one that misses it is reported as unreadable rather than
+    /// guessed at.
+    public static func inspect(_ record: SessionMarker.Record,
+                               mountedPaths: Set<String>,
+                               timeout: TimeInterval = 5) async -> UncleanShutdownReport {
+        var report = UncleanShutdownReport(previousStart: record.startedAt,
+                                           shadowedPaths: [], cleanPaths: [])
+        for path in record.mountPoints {
+            if mountedPaths.contains(path) {
+                report.stillMountedPaths.append(path)
+                continue
+            }
+            let one = await Deadline.run(seconds: timeout) {
+                inspect(SessionMarker.Record(startedAt: record.startedAt, mountPoints: [path]))
+            }
+            guard let one else {
+                report.unreadablePaths.append(path)
+                continue
+            }
+            report.shadowedPaths += one.shadowedPaths
+            report.cleanPaths += one.cleanPaths
+        }
+        return report
     }
 
     /// Move local data out of a mountpoint so the remote can be mounted without

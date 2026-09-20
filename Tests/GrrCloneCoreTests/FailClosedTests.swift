@@ -203,11 +203,12 @@ final class FailClosedTests: XCTestCase {
     }
 
     /// Refuse rather than aim a real password at an unintended target.
-    func testEncryptRefusesAnEmptyPath() {
-        XCTAssertThrowsError(
-            try ConfigEncryption.encrypt(rclone: URL(fileURLWithPath: "/bin/echo"),
-                                         configPath: "", password: "hunter2")
-        ) { error in
+    func testEncryptRefusesAnEmptyPath() async {
+        do {
+            try await ConfigEncryption.encrypt(rclone: URL(fileURLWithPath: "/bin/echo"),
+                                               configPath: "", password: "hunter2")
+            XCTFail("must refuse")
+        } catch {
             guard case ConfigEncryption.Failure.unknownConfigPath = error else {
                 return XCTFail("expected unknownConfigPath, got \(error)")
             }
@@ -215,16 +216,41 @@ final class FailClosedTests: XCTestCase {
     }
 
     /// Unknown is not permission to proceed.
-    func testEncryptRefusesAConfigItCannotRead() {
+    func testEncryptRefusesAConfigItCannotRead() async {
         let missing = dir.appendingPathComponent("nope.conf").path
-        XCTAssertThrowsError(
-            try ConfigEncryption.encrypt(rclone: URL(fileURLWithPath: "/bin/echo"),
-                                         configPath: missing, password: "hunter2")
-        ) { error in
+        do {
+            try await ConfigEncryption.encrypt(rclone: URL(fileURLWithPath: "/bin/echo"),
+                                               configPath: missing, password: "hunter2")
+            XCTFail("must refuse")
+        } catch {
             guard case ConfigEncryption.Failure.cannotReadConfig = error else {
                 return XCTFail("expected cannotReadConfig, got \(error)")
             }
         }
+    }
+
+    /// A tool that never answers must not hang the caller. This stand-in ignores
+    /// its arguments and sleeps, which is what an rclone stuck on an unexpected
+    /// prompt looks like from here. The deadline ends it and says so.
+    func testEncryptGivesUpOnAToolThatNeverFinishes() async throws {
+        let config = dir.appendingPathComponent("rclone.conf")
+        try "[dav1]\ntype = webdav\n".write(to: config, atomically: true, encoding: .utf8)
+        let stuck = dir.appendingPathComponent("stuck-rclone.sh")
+        try "#!/bin/sh\nsleep 30\n".write(to: stuck, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stuck.path)
+        let started = Date()
+        do {
+            try await ConfigEncryption.encrypt(rclone: stuck,
+                                               configPath: config.path, password: "hunter2",
+                                               timeout: 1)
+            XCTFail("must time out")
+        } catch {
+            guard case ConfigEncryption.Failure.commandFailed(let why) = error else {
+                return XCTFail("expected commandFailed, got \(error)")
+            }
+            XCTAssertTrue(why.contains("did not finish"), why)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "the deadline must be real")
     }
 
     // MARK: - TransportKind (#78)

@@ -195,6 +195,33 @@ final class UncleanShutdownReportTests: XCTestCase {
         XCTAssertEqual(report.cleanPaths, [path.path])
     }
 
+    /// The launch-time inspection skips paths the mount table still lists — a
+    /// mounted path cannot be holding shadowed local files, and listing a dead one
+    /// blocks for minutes — and reports them separately.
+    func testAStillMountedPathIsSkippedNotListed() async throws {
+        let mounted = root.appendingPathComponent("Cloud")
+        let local = root.appendingPathComponent("Vaults")
+        try FileManager.default.createDirectory(at: mounted, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        try "data".write(to: mounted.appendingPathComponent("x.txt"), atomically: true, encoding: .utf8)
+        try "data".write(to: local.appendingPathComponent("y.txt"), atomically: true, encoding: .utf8)
+
+        let report = await UncleanShutdownReport.inspect(
+            SessionMarker.Record(startedAt: Date(), mountPoints: [mounted.path, local.path]),
+            mountedPaths: [mounted.path])
+
+        XCTAssertEqual(report.stillMountedPaths, [mounted.path], "a mounted path is not inspected")
+        XCTAssertEqual(report.shadowedPaths, [local.path], "an unmounted path with files is")
+        XCTAssertTrue(report.needsAttention)
+    }
+
+    /// Unknown is reported as unknown, and counts as needing attention.
+    func testAnUnreadablePathNeedsAttention() {
+        let report = UncleanShutdownReport(previousStart: Date(), shadowedPaths: [], cleanPaths: [],
+                                           unreadablePaths: ["/Users/x/Cloud"])
+        XCTAssertTrue(report.needsAttention)
+    }
+
     func testAPathThatNoLongerExistsIsIgnored() {
         let report = UncleanShutdownReport.inspect(
             SessionMarker.Record(startedAt: Date(),
