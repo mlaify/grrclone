@@ -19,6 +19,13 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ### Fixed
 
+- A volume from a previous session that grrclone could not disconnect at launch is
+  now named in the menu, with the command that clears it, and is not connected at
+  login until it is. It used to go unmentioned. A launch that fails part-way — an
+  old background process it cannot identify, a volume it cannot clear — also no
+  longer erases the record of what the previous session had mounted, which the
+  next launch needs to find files written into a mount point while nothing was
+  mounted there. ([#117](https://github.com/mlaify/grrclone/issues/117))
 - Two connections can no longer share a name. The name is also the mount folder, and
   connecting a second connection named like a mounted one used to take over the
   first's ownership record and then forget it, leaving a live volume nothing would
