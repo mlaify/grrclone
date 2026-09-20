@@ -32,6 +32,16 @@ public actor ConnectionManager {
     /// decide its cache is idle.
     private var connecting: Set<String> = []
 
+    /// Remotes whose configuration is being deleted right now.
+    ///
+    /// `deleteRemote` checks for live and in-progress mounts and then awaits
+    /// `config/delete`, and that await releases the actor: a click on Connect in
+    /// between would start serving a remote whose configuration is about to go,
+    /// and the deletion would then purge the cache and remove the row under a
+    /// live mount. So the remote is reserved for the whole deletion and `connect()`
+    /// refuses it. Codex found the gap between the last check and the delete.
+    private var deleting: Set<String> = []
+
     /// - Parameter mountTable: how to read what is mounted. Injected so a test can
     ///   make the read fail and prove the manager fails closed when it does.
     public init(supervisor: DaemonSupervisor,
@@ -128,6 +138,9 @@ public actor ConnectionManager {
 
         guard let transport = transports[connection.transport] else {
             throw MountError.mountFailed("No transport available for \(connection.transport.rawValue)")
+        }
+        guard !deleting.contains(connection.remote) else {
+            throw MountError.mountFailed("\(connection.remote) is being deleted.")
         }
 
         let root = mountRoot ?? Self.defaultMountRoot()
@@ -538,14 +551,20 @@ public actor ConnectionManager {
         }) {
             return live.connection.displayName
         }
-        if connecting.contains(where: { $0.hasPrefix("\(connection.remote):") && $0 != connection.fsSpec }) {
+        // Any in-progress connect to this remote, the connection being deleted
+        // included: a mount being established is a mount. The first version
+        // excluded the deleted connection's own fsSpec, which also excluded a
+        // twin on the same path.
+        if connecting.contains(where: { $0.hasPrefix("\(connection.remote):") }) {
             return "a connection to \(connection.remote) that is still connecting"
         }
         return nil
     }
 
-    /// Test seam: mark a filesystem as mid-connect without a daemon.
+    /// Test seams: mark a filesystem as mid-connect, or a remote as mid-delete,
+    /// without a daemon.
     func markConnectingForTesting(fsSpec: String) { connecting.insert(fsSpec) }
+    func markDeletingForTesting(remote: String) { deleting.insert(remote) }
 
     /// Remove a remote from rclone's configuration, and grrclone's cache of it.
     ///
@@ -583,6 +602,11 @@ public actor ConnectionManager {
         if let sibling = sibling(of: connection) {
             throw DeletionRefusal.remoteInUse(by: sibling)
         }
+
+        // Reserved from here to the end, so nothing can start connecting to it in
+        // any of the awaits below.
+        deleting.insert(connection.remote)
+        defer { deleting.remove(connection.remote) }
 
         let client = try await supervisor.requireClient()
 

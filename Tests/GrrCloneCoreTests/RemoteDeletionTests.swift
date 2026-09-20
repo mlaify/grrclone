@@ -347,21 +347,42 @@ final class RemoteDeletionTests: XCTestCase {
         }
     }
 
-    /// A sibling that is between `serve/start` and `active` is invisible to a
-    /// search of `active`; the refusal has to see it too.
-    func testDeletingARemoteIsRefusedWhileASiblingIsStillConnecting() async {
-        let manager = idleManager()
-        await manager.markConnectingForTesting(fsSpec: "dav1:documents")
-        let whole = Connection(remote: "dav1", displayName: "Cloud")
+    /// A connection that is between `serve/start` and `active` is invisible to a
+    /// search of `active`; the refusal has to see it too — whether it is a sibling
+    /// folder, a twin on the same path, or the connection being deleted itself.
+    func testDeletingARemoteIsRefusedWhileAnyConnectionToItIsStillConnecting() async {
+        for inProgress in ["dav1:documents", "dav1:", "dav1:photos"] {
+            let manager = idleManager()
+            await manager.markConnectingForTesting(fsSpec: inProgress)
+            let whole = Connection(remote: "dav1", displayName: "Cloud")
 
+            do {
+                _ = try await manager.deleteRemote(whole, configPath: dir.appendingPathComponent("rclone.conf").path)
+                XCTFail("must refuse while \(inProgress) is connecting")
+            } catch let refusal as ConnectionManager.DeletionRefusal {
+                guard case .remoteInUse(let who) = refusal else { return XCTFail("\(refusal)") }
+                XCTAssertTrue(who.contains("still connecting"), who)
+            } catch {
+                XCTFail("wrong error: \(error)")
+            }
+        }
+    }
+
+    /// The last check and `config/delete` are not one step: the await between
+    /// them releases the actor. A connect that lands in that gap is refused
+    /// because the remote is reserved for the deletion — before the daemon is
+    /// asked for anything, which the idle supervisor here would refuse.
+    func testConnectIsRefusedWhileTheRemoteIsBeingDeleted() async {
+        let manager = idleManager()
+        await manager.markDeletingForTesting(remote: "dav1")
         do {
-            _ = try await manager.deleteRemote(whole, configPath: dir.appendingPathComponent("rclone.conf").path)
+            _ = try await manager.connect(Connection(remote: "dav1", path: "photos"), mountRoot: dir)
             XCTFail("must refuse")
-        } catch let refusal as ConnectionManager.DeletionRefusal {
-            guard case .remoteInUse(let who) = refusal else { return XCTFail("\(refusal)") }
-            XCTAssertTrue(who.contains("still connecting"), who)
+        } catch let error as MountError {
+            guard case .mountFailed(let why) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("being deleted"), why)
         } catch {
-            XCTFail("wrong error: \(error)")
+            XCTFail("wrong error — the reservation must be checked before the supervisor: \(error)")
         }
     }
 
