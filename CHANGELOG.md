@@ -29,6 +29,9 @@ thing was built the way it was, and what was tried and rejected — lives in
   file overwritten — every mount name, folder and read-only choice gone without a
   word. The unreadable file is now moved aside and named in the menu, so it can be
   restored. ([#113](https://github.com/mlaify/grrclone/issues/113))
+- A change to a connection that could not be saved no longer looks saved. The list
+  in memory now changes only after the file on disk has, and a refused save is
+  reported in the menu. ([#121](https://github.com/mlaify/grrclone/issues/121))
 - Disconnecting now checks the list of mounted volumes afterwards rather than trusting
   the unmount command's exit status, which lies in both directions on a path with
   several volumes stacked on it. A layer removed with another still under it is

@@ -212,6 +212,44 @@ extension ConnectionStoreTests {
             guard case .unreadableStoreStillInPlace = conflict else { return XCTFail("\(conflict)") }
         }
         XCTAssertEqual(try Data(contentsOf: url), original, "and still untouched afterwards")
+        let inMemory = await store.all
+        XCTAssertTrue(inMemory.isEmpty, "a refused write must not leave memory ahead of disk")
+    }
+
+    /// Memory follows disk, never leads it. A save that fails for any reason —
+    /// here, a directory that stops being writable — leaves the list exactly as it
+    /// was, so the UI cannot read back an edit that did not happen (#121).
+    func testAFailedWriteLeavesTheListUnchanged() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grrclone-store-ro-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let store = ConnectionStore(fileURL: dir.appendingPathComponent("connections.json"))
+        var a = Connection(remote: "dav1", displayName: "Cloud")
+        try await store.upsert(a)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        a.options.readOnly = true
+        do {
+            try await store.upsert(a)
+            XCTFail("the write must fail")
+        } catch {
+            // expected
+        }
+        let saved = await store.connection(id: a.id)
+        XCTAssertEqual(saved?.options.readOnly, false, "read-only must not appear on when it was not saved")
+
+        do {
+            try await store.remove(id: a.id)
+            XCTFail("the write must fail")
+        } catch {
+            // expected
+        }
+        let stillThere = await store.connection(id: a.id)
+        XCTAssertNotNil(stillThere, "a failed removal must not remove")
     }
 
     /// Re-saving a connection under its own name is an edit, not a collision.

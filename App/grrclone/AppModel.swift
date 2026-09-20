@@ -152,6 +152,12 @@ final class AppModel: ObservableObject {
     // MARK: - Startup
 
     func start() async {
+        // First of all, before any path that can return early — no rclone, a daemon
+        // that will not start, a cancelled password prompt followed by Quit. Each
+        // of those used to leave this unsaid, and by the next launch the original
+        // file was already moved and its location gone with it (Codex, #113).
+        await reportStoreLoadFailure()
+
         guard let binary = DaemonSupervisor.locateBinary(bundled: Self.bundledRcloneURL()) else {
             status = "rclone not found"
             lastError = "No rclone binary was found. Install rclone, or use a build that bundles it."
@@ -196,9 +202,8 @@ final class AppModel: ObservableObject {
                 return
             }
 
-            await reportStoreLoadFailure()
             let remotes = try await client.listRemotes()
-            _ = try? await store.adoptNewRemotes(remotes)
+            await adoptRemotesReporting(remotes)
 
             daemonReady = true
             await finishStartup()
@@ -301,17 +306,11 @@ final class AppModel: ObservableObject {
     /// Say why every connection is suddenly back at its defaults, and where the
     /// file with the settings went.
     ///
-    /// Called from both paths that adopt remotes — `start()` and, after a deferred
-    /// unlock, `finishStartup()` — because the first version said it only in
-    /// `start()`, which returns early when the password prompt is cancelled. The
-    /// unlock path then adopted and persisted without a word, and by the next
-    /// launch the original file had long been moved, so the warning was lost for
-    /// good. Codex found that on review.
-    ///
-    /// Adoption still runs when the file was moved aside: an empty menu is not a
-    /// better outcome than a working one with a warning on it, and the quarantined
-    /// file makes the settings recoverable by hand. When it could *not* be moved,
-    /// the store refuses every write, and adoption fails quietly into that refusal.
+    /// The first thing `start()` does, ahead of every early return. Adoption still
+    /// runs when the file was moved aside: an empty menu is not a better outcome
+    /// than a working one with a warning on it, and the quarantined file makes the
+    /// settings recoverable by hand. When it could *not* be moved, the store
+    /// refuses every write, and `adoptRemotesReporting` says so.
     private func reportStoreLoadFailure() async {
         guard let failure = await store.loadFailure else { return }
         if let aside = failure.quarantinedAt {
@@ -326,10 +325,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Adopt, and say so when it could not be saved. A `try?` here meant a remote
+    /// that could not be persisted simply never appeared, with nothing to explain
+    /// why (#121).
+    private func adoptRemotesReporting(_ remotes: [String]) async {
+        guard !remotes.isEmpty else { return }
+        do { _ = try await store.adoptNewRemotes(remotes) }
+        catch { lastError = "Could not save the list of connections: \(error.localizedDescription)" }
+    }
+
     private func finishStartup() async {
-        await reportStoreLoadFailure()
         let remotes = (try? await requireClientRemotes()) ?? []
-        if !remotes.isEmpty { _ = try? await store.adoptNewRemotes(remotes) }
+        await adoptRemotesReporting(remotes)
 
         status = "Ready"
         await refresh()
@@ -497,7 +504,7 @@ final class AppModel: ObservableObject {
     /// Pick up a remote created by the interactive flow.
     func adoptNewRemotes() async {
         guard let supervisor, let client = try? await supervisor.requireClient() else { return }
-        _ = try? await store.adoptNewRemotes(try await client.listRemotes())
+        if let remotes = try? await client.listRemotes() { await adoptRemotesReporting(remotes) }
         await refresh()
     }
 
@@ -587,7 +594,7 @@ final class AppModel: ObservableObject {
         let client = try await supervisor.requireClient()
         try await client.createRemote(name: name, type: type, parameters: parameters)
 
-        _ = try? await store.adoptNewRemotes(try await client.listRemotes())
+        await adoptRemotesReporting(try await client.listRemotes())
         await refresh()
         status = "Added \(name)"
     }
