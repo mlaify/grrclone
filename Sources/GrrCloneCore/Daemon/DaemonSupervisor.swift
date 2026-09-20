@@ -53,6 +53,10 @@ public actor DaemonSupervisor {
     /// One per drained pipe; finished when draining stops so the consumer task
     /// ends rather than waiting forever on a pipe nobody reads.
     private var drains: [AsyncStream<Data>.Continuation] = []
+    private var drainTasks: [Task<Void, Never>] = []
+    /// Counts daemon starts, so each start's log streams have their own identity
+    /// and a previous start's still-draining consumer cannot interleave with them.
+    private var generation = 0
     private var client: RcloneRCClient?
     private let pidFile: DaemonPidFile
     /// Tracks whether this session ended properly. See `SessionMarker`.
@@ -220,7 +224,9 @@ public actor DaemonSupervisor {
         // the stream in read order, and a single task per pipe appends them in
         // that order.
         let log = self.log
-        for (pipe, stream) in [(errPipe, DaemonLog.Stream.stderr), (outPipe, .stdout)] {
+        generation += 1
+        for (pipe, kind) in [(errPipe, DaemonLog.Stream.Kind.stderr), (outPipe, .stdout)] {
+            let stream = DaemonLog.Stream(kind: kind, generation: generation)
             let (chunks, feed) = AsyncStream<Data>.makeStream()
             drains.append(feed)
             pipe.fileHandleForReading.readabilityHandler = { handle in
@@ -229,9 +235,9 @@ public actor DaemonSupervisor {
                 guard !data.isEmpty else { feed.finish(); return }
                 feed.yield(data)
             }
-            Task {
+            drainTasks.append(Task {
                 for await chunk in chunks { await log.append(chunk, from: stream) }
-            }
+            })
         }
 
         do { try process.run() }
@@ -378,7 +384,9 @@ public actor DaemonSupervisor {
     private func stopDraining(_ pipes: [Pipe]) {
         for pipe in pipes { pipe.fileHandleForReading.readabilityHandler = nil }
         for feed in drains { feed.finish() }
+        for task in drainTasks { task.cancel() }
         drains = []
+        drainTasks = []
     }
 
     /// Throws rather than degrading. A discarded status here leaves the buffer as the

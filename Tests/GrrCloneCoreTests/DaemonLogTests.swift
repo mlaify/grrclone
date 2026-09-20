@@ -268,6 +268,22 @@ final class DaemonLogBufferTests: XCTestCase {
                       "dropping stops at stderr's own next record: \(stored)")
     }
 
+    /// A restarted daemon's stderr is not the old daemon's stderr. A new
+    /// generation's timestamped line must not end a sensitive record the old
+    /// generation is still delivering.
+    func testANewGenerationDoesNotEndTheOldGenerationsSensitiveRecord() async {
+        let log = DaemonLog()
+        let secret = "OLD-GENERATION-SECRET-\(UUID().uuidString)"
+        let old = DaemonLog.Stream(kind: .stderr, generation: 1)
+        let new = DaemonLog.Stream(kind: .stderr, generation: 2)
+        await log.append(Data("2026/09/19 16:28:59 DEBUG : rc: \"config/dump\": reply map[g:map[key:{\n".utf8), from: old)
+        await log.append(Data("2026/09/20 10:00:00 NOTICE : new daemon starting\n".utf8), from: new)
+        await log.append(Data("\(secret)}]]: <nil>\n".utf8), from: old)
+        let stored = await log.recent.map(\.text)
+        XCTAssertFalse(stored.joined().contains(secret), "the old generation's tail leaked: \(stored)")
+        XCTAssertTrue(stored.contains("2026/09/20 10:00:00 NOTICE : new daemon starting"))
+    }
+
     /// Ordinary interleaving, with nothing sensitive: each stream's partial line is
     /// its own, so a stdout fragment is never glued onto a stderr one.
     func testStreamsAssembleTheirOwnLines() async {
