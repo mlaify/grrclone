@@ -157,10 +157,14 @@ public actor ConnectionManager {
                 + "\"\(other.connection.displayName)\". Give this one a different name.")
         }
 
-        let client = try await supervisor.start()
-
+        // Registered before the first suspension, not after. `supervisor.start()`
+        // releases the actor, and a deletion arriving in that gap saw no sibling,
+        // reserved the remote, and passed its final check while this connect was
+        // about to start a server. Codex found that on the third review.
         connecting.insert(connection.fsSpec)
         defer { connecting.remove(connection.fsSpec) }
+
+        let client = try await supervisor.start()
 
         let params = transport.serveParameters(for: connection, cacheRoot: cacheRoot)
         let server = try await client.startServer(params)
