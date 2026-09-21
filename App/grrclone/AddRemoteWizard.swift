@@ -417,11 +417,12 @@ struct AddRemoteWizard: View {
         creating = true
         defer { creating = false }
 
-        // Only what the user can see and has answered. Sending every option would
-        // write defaults into the config as if they had been chosen, which makes a
-        // later rclone release unable to change them.
-        let visible = Set(provider.visibleOptions(values: values, includeAdvanced: true).map(\.name))
-        let parameters = values.filter { visible.contains($0.key) && !$0.value.isEmpty }
+        // Only what the user can see and actually chose. The form is seeded with
+        // every default so it shows what will be used, and the first version then
+        // sent all of them — writing defaults into the config as if chosen, which a
+        // later rclone release could no longer change (#120). `parametersToSend`
+        // leaves out anything still equal to its default.
+        let parameters = provider.parametersToSend(values: values)
 
         do {
             if provider.requiresOAuth {

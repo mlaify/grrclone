@@ -143,6 +143,41 @@ final class ProvidersTests: XCTestCase {
         }
     }
 
+    // MARK: What gets sent (#120)
+
+    /// A form seeded with every default, and left alone, sends nothing: those are
+    /// rclone's choices, not the user's, and writing them pins them.
+    func testAnUntouchedSeededFormSendsNothing() throws {
+        let s3 = try provider("s3")
+        var seeded: [String: String] = [:]
+        for option in s3.options where !option.defaultValue.isEmpty {
+            seeded[option.name] = option.defaultValue
+        }
+        XCTAssertFalse(seeded.isEmpty, "s3 has defaults to seed, or this test proves nothing")
+        XCTAssertEqual(s3.parametersToSend(values: seeded), [:])
+    }
+
+    /// What the user typed or changed goes; what they left at the default and what
+    /// they left empty does not.
+    func testOnlyChangedVisibleValuesAreSent() throws {
+        let webdav = try provider("webdav")
+        var values: [String: String] = [:]
+        for option in webdav.options where !option.defaultValue.isEmpty {
+            values[option.name] = option.defaultValue
+        }
+        values["url"] = "https://dav.example.com"
+        values["user"] = ""
+        let sent = webdav.parametersToSend(values: values)
+        XCTAssertEqual(sent, ["url": "https://dav.example.com"], "\(sent)")
+
+        // Changing a defaulted option makes it the user's, and it is sent.
+        if let defaulted = webdav.options.first(where: { !$0.defaultValue.isEmpty && $0.hide == 0 }) {
+            values[defaulted.name] = defaulted.defaultValue + "x"
+            XCTAssertEqual(webdav.parametersToSend(values: values)[defaulted.name],
+                           defaulted.defaultValue + "x")
+        }
+    }
+
     // MARK: Validation
 
     func testRequiredOptionsWithNoValueBlockSubmission() throws {

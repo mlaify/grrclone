@@ -206,6 +206,26 @@ extension RcloneRCClient.Provider {
         return negated ? !matches : matches
     }
 
+    /// What a form should actually send: the visible options whose value is not
+    /// simply the provider's own default.
+    ///
+    /// The wizard seeds every default into the form so the person sees what will
+    /// be used — and then sent every one of them, so a new S3 remote landed in
+    /// rclone.conf with dozens of `chunk_size = …` lines nobody chose, pinned
+    /// against whatever a later rclone release would have preferred (#120). A
+    /// value equal to the default is rclone's decision, not the user's, and is
+    /// left out; anything else visible and non-empty is theirs and goes in.
+    public func parametersToSend(values: [String: String]) -> [String: String] {
+        let visible = visibleOptions(values: values, includeAdvanced: true)
+        var result: [String: String] = [:]
+        for option in visible {
+            guard let value = values[option.name], !value.isEmpty,
+                  value != option.defaultValue else { continue }
+            result[option.name] = value
+        }
+        return result
+    }
+
     /// Required options with nothing filled in, which is what stops the form being
     /// submitted.
     public func missingRequired(values: [String: String]) -> [RcloneRCClient.ProviderOption] {
