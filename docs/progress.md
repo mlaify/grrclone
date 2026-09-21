@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.8.0 is released**, and installable two ways:
+**v0.9.0 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-347 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+354 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -40,9 +40,28 @@ did not before, and which was proved rather than assumed.
 | v0.7.0 | **Released** 2026-09-19 |
 | v0.7.1 | **Released** 2026-09-19 |
 | v0.8.0 | **Released** 2026-09-21 |
-| v0.9.0 | Planned — robustness and polish |
+| v0.9.0 | **Released** 2026-09-21 |
 
 ## Releases
+
+### v0.9.0 — 2026-09-21
+
+The rest of the review's backlog, the same day as 0.8.0.
+
+- **A remote name that already exists is refused** (#110). rclone's `config/create`
+  deletes the existing section first — verified — so this was a credential-loss path
+  one typo away; 0.8.0's notes wrongly listed it as shipped. The configuration is
+  now backed up before a remote is added, as it was before one is deleted.
+- **The daemon dying is noticed at once** (#119): a termination handler installed
+  before `run()`, a single-flight health pass that rebuilds every mount and starts a
+  fresh daemon, and a ninety-second probe while anything is mounted. Tested with
+  SIGKILL against the real daemon.
+- **The wizard sends only what the user chose** (#120), not every provider default.
+- The async config encryption's intermittent 60 s timeout was real: `waitUntilExit()`
+  on a Dispatch worker under the full suite. A termination handler and a bounded
+  semaphore replaced it.
+
+354 tests. Codex was still silent; merged on CI and self-review, by decision.
 
 ### v0.8.0 — 2026-09-21
 
@@ -523,7 +542,7 @@ things in them are not waiting on us.
 | `v0.5.0` | Transfer visibility, remote editing, cache control — shipped as 0.6.0 | closed |
 | `v0.7.0` | Daily update check, one permission, build provenance | closed, shipped 2026-09-19 |
 | `v0.8.0` | The 2026-09-19 review's safety fixes, and reclaiming fingerprinted mounts | closed, shipped 2026-09-21 |
-| `v0.9.0` | Daemon exit detection, wizard hygiene, store honesty, arm64-only rclone | open |
+| `v0.9.0` | Daemon exit detection, remote-name collisions, wizard defaults | closed, shipped 2026-09-21 |
 | `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
 | `Known limitations` | Documented, deliberately not fixed | never closes |
 
