@@ -1,6 +1,6 @@
 cask "grrclone" do
-  version "0.8.0"
-  sha256 "8bf05aa884971774b2947d4f5b8290d651e00b21b7b26804d581338db4bdccb2"
+  version "0.9.0"
+  sha256 "1d3bc43c5c4bfdaa3193ec9e75a7bde5b030fa9d6a42f34df0d885ec77a28545"
 
   url "https://github.com/mlaify/grrclone/releases/download/v#{version}/grrclone.dmg"
   name "grrclone"
