@@ -533,12 +533,43 @@ final class AppModel: ObservableObject {
 
     // MARK: - Interactive remote setup
 
+    /// Refuse a name that would replace an existing remote, and back the
+    /// configuration up before anything writes to it.
+    ///
+    /// Both creation paths go through here, the wizard's own check included:
+    /// rclone's `config/create` deletes the existing section first, so a collision
+    /// that slipped past the form would cost a remote's credentials (#110). The
+    /// backup is the same one deletion takes, for the same reason — this rewrites
+    /// the file that holds every credential the user has.
+    private func prepareToCreate(_ name: String, client: RcloneRCClient) async throws {
+        if let why = RemoteName.refusal(for: name, existing: try await client.listRemotes()) {
+            throw RemoteCreationRefusal.nameTaken(why)
+        }
+        await refreshConfigEncryptionState()
+        guard !configPath.isEmpty else { throw RemoteCreationRefusal.noBackup }
+        _ = try ConfigBackup.make(configPath: configPath)
+    }
+
+    enum RemoteCreationRefusal: Error, LocalizedError {
+        case nameTaken(String)
+        case noBackup
+        var errorDescription: String? {
+            switch self {
+            case .nameTaken(let why): return why
+            case .noBackup:
+                return "grrclone could not determine where your rclone configuration "
+                     + "lives, so it will not add to it without a backup."
+            }
+        }
+    }
+
     /// Start configuring a remote that asks questions rather than taking a form.
     func beginConfiguring(name: String, type: String,
                           parameters: [String: String]) async throws -> RcloneRCClient.ConfigStep {
         guard let supervisor else { throw DaemonSupervisor.Failure.notRunning }
-        return try await supervisor.requireClient()
-            .beginConfiguring(name: name, type: type, parameters: parameters)
+        let client = try await supervisor.requireClient()
+        try await prepareToCreate(name, client: client)
+        return try await client.beginConfiguring(name: name, type: type, parameters: parameters)
     }
 
     func continueConfiguring(name: String, state: String,
@@ -626,6 +657,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - Remotes
 
+    /// The remotes that already exist, so the wizard can refuse a name up front.
+    func existingRemoteNames() async -> [String] {
+        guard let supervisor, let client = try? await supervisor.requireClient() else { return [] }
+        return (try? await client.listRemotes()) ?? []
+    }
+
     /// The backends rclone supports, asked of the daemon rather than listed here.
     func availableProviders() async throws -> [RcloneRCClient.Provider] {
         guard let supervisor else { return [] }
@@ -639,6 +676,7 @@ final class AppModel: ObservableObject {
     func createRemote(name: String, type: String, parameters: [String: String]) async throws {
         guard let supervisor else { return }
         let client = try await supervisor.requireClient()
+        try await prepareToCreate(name, client: client)
         try await client.createRemote(name: name, type: type, parameters: parameters)
 
         await adoptRemotesReporting(try await client.listRemotes())

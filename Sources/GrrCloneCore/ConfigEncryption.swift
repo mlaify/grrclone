@@ -107,6 +107,16 @@ public enum ConfigEncryption {
         process.standardOutput = output
         process.standardError = output
 
+        // Exit is observed through a handler installed *before* `run()`, signalling
+        // a semaphore, never through `waitUntilExit()`. The first async version
+        // called `waitUntilExit()` from the Dispatch thread `Deadline` runs work on,
+        // and under the full test suite — other tests' child processes coming and
+        // going — it intermittently never returned, so a two-second encryption hit
+        // the sixty-second deadline. Not reproducible in isolation, which is the
+        // signature of a run-loop-on-a-worker-thread problem. A handler and a
+        // semaphore have no run loop to be starved of.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         try process.run()
 
         // Asked for twice: once to set, once to confirm.
@@ -114,11 +124,13 @@ public enum ConfigEncryption {
         let finished: (status: Int32, detail: String)? = await Deadline.run(seconds: timeout) {
             input.fileHandleForWriting.write(answer)
             try? input.fileHandleForWriting.close()
+            // Read to EOF first: the child's stdout closes at exit, and reading before
+            // waiting means a chatty child cannot block on a full pipe.
             let detail = String(data: (try? output.fileHandleForReading.readToEnd()) ?? Data(),
                                 encoding: .utf8) ?? ""
-            process.waitUntilExit()
+            guard exited.wait(timeout: .now() + timeout) == .success else { return nil }
             return (process.terminationStatus, detail)
-        }
+        } ?? nil
         guard let finished else {
             process.terminate()
             throw Failure.commandFailed("rclone did not finish within \(Int(timeout))s")
