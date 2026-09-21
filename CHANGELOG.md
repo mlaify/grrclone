@@ -19,6 +19,10 @@ thing was built the way it was, and what was tried and rejected — lives in
   without a word. The configuration is now also backed up alongside itself before
   a remote is added, as it already was before one is deleted.
   ([#110](https://github.com/mlaify/grrclone/issues/110))
+- Adding a remote no longer writes every advanced setting's default into the
+  configuration as if it had been chosen. Only values that differ from rclone's own
+  defaults are saved, so a later rclone can still change the ones nobody touched.
+  ([#120](https://github.com/mlaify/grrclone/issues/120))
 
 ## [0.8.0] - 2026-09-21
 
