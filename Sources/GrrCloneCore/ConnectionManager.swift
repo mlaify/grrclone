@@ -870,6 +870,51 @@ public actor ConnectionManager {
 
     // MARK: - Health and recovery
 
+    /// True while a health pass is running, so a second trigger — the exit handler
+    /// and the timer firing together, or a wake during a repair — does not start
+    /// a second pass that tears down what the first is rebuilding.
+    private var healthCheckInFlight = false
+    private var periodicHealthChecks: Task<Void, Never>?
+
+    /// Repair everything when the daemon dies out from under its mounts.
+    ///
+    /// Wires the supervisor's unexpected-exit handler to a full health pass. Every
+    /// active mount now points at a dead server; `checkHealth` finds each one
+    /// unresponsive and `reconnect` rebuilds it, which starts a fresh daemon on the
+    /// first `connect`. `onRepaired` receives the report so the UI can say what
+    /// happened; it runs off the main actor.
+    public func installDaemonExitRepair(
+        onRepaired: @escaping @Sendable (HealthReport) async -> Void
+    ) async {
+        await supervisor.setOnUnexpectedExit { [weak self] _ in
+            guard let self else { return }
+            let report = await self.checkHealth()
+            await onRepaired(report)
+        }
+    }
+
+    /// Probe on a timer as a backstop for a server that is alive but wedged, which
+    /// no exit handler will ever report. Only while something is mounted, and
+    /// never overlapping another pass.
+    public func startPeriodicHealthChecks(every interval: TimeInterval = 90,
+                                          onRepaired: @escaping @Sendable (HealthReport) async -> Void) {
+        periodicHealthChecks?.cancel()
+        periodicHealthChecks = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                guard await !self.activeMounts.isEmpty else { continue }
+                let report = await self.checkHealth()
+                if !report.repaired.isEmpty || !report.failed.isEmpty { await onRepaired(report) }
+            }
+        }
+    }
+
+    public func stopPeriodicHealthChecks() {
+        periodicHealthChecks?.cancel()
+        periodicHealthChecks = nil
+    }
+
     public struct HealthReport: Sendable {
         public var healthy: [UUID] = []
         public var repaired: [UUID] = []
@@ -885,6 +930,12 @@ public actor ConnectionManager {
     @discardableResult
     public func checkHealth(repair: Bool = true) async -> HealthReport {
         var report = HealthReport()
+        // Single flight. Actor reentrancy lets a second call interleave at every
+        // await below; two passes tearing down and rebuilding the same mounts is
+        // the damage this exists to prevent.
+        guard !healthCheckInFlight else { return report }
+        healthCheckInFlight = true
+        defer { healthCheckInFlight = false }
 
         for mount in active.values {
             switch await MountHealth.probe(mount.mountPoint) {

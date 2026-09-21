@@ -23,6 +23,12 @@ thing was built the way it was, and what was tried and rejected — lives in
   configuration as if it had been chosen. Only values that differ from rclone's own
   defaults are saved, so a later rclone can still change the ones nobody touched.
   ([#120](https://github.com/mlaify/grrclone/issues/120))
+- grrclone now notices at once when the rclone process stops unexpectedly and
+  reconnects every volume, instead of leaving them pointing at nothing until the
+  Mac next woke from sleep, the network changed, or someone clicked Check mounts.
+  A volume whose server is alive but stuck is caught by a check that now also runs
+  every ninety seconds while anything is connected.
+  ([#119](https://github.com/mlaify/grrclone/issues/119))
 
 ## [0.8.0] - 2026-09-21
 
