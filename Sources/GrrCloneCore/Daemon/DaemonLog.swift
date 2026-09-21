@@ -181,7 +181,7 @@ public actor DaemonLog {
         //
         // The first version of this matched only `--rc-pass VALUE` and missed the real
         // thing entirely: rclone echoes its own command line as
-        // `"--rc-pass" "roOiGfANU…"`, with each argument quoted, so the pattern never
+        // `"--rc-pass" "FAKE-RC-PASS…"`, with each argument quoted, so the pattern never
         // fired and the control-socket credentials sat in the log in clear text. Found
         // by reading actual DEBUG output rather than the invented example the first
         // test was written against.
