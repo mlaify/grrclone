@@ -17,6 +17,12 @@ struct AddRemoteWizard: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var providers: [RcloneRCClient.Provider] = []
+    /// Names already in rclone.conf. A new remote may not take one: rclone would
+    /// replace the existing section, credentials and all (#110).
+    @State private var existingNames: [String] = []
+    /// Set only once this flow has created something, so cancelling never deletes
+    /// a remote that was there before the wizard opened.
+    @State private var createdByThisFlow = false
     @State private var selected: RcloneRCClient.Provider?
     @State private var name = ""
     @State private var values: [String: String] = [:]
@@ -132,9 +138,13 @@ struct AddRemoteWizard: View {
             Section {
                 TextField("Name", text: $name)
             } footer: {
-                Text("What this remote is called in rclone. Letters, numbers, dash and "
-                     + "underscore.")
-                .font(.caption).foregroundStyle(.secondary)
+                // The refusal is said here, under the field, before Add is enabled —
+                // not after a click.
+                Text(nameRefusal ?? "What this remote is called in rclone. Letters, "
+                                    + "numbers, dash and underscore.")
+                .font(.caption)
+                .foregroundStyle(nameRefusal == nil ? Color.secondary : Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             if provider.requiresOAuth {
@@ -362,13 +372,19 @@ struct AddRemoteWizard: View {
     /// Abandoning an interactive flow leaves a half-built remote in the config, which
     /// would then show up in the menu as something that cannot be mounted. Remove it.
     private func cancel() async {
-        if question != nil { await model.discardRemote(named: sanitisedName) }
+        // Only what this flow itself made. A name that already existed is refused
+        // before anything is created, so this can never reach a pre-existing remote.
+        if question != nil && createdByThisFlow { await model.discardRemote(named: sanitisedName) }
         dismiss()
+    }
+
+    private var nameRefusal: String? {
+        RemoteName.refusal(for: sanitisedName, existing: existingNames)
     }
 
     private var canCreate: Bool {
         guard let provider = selected, !creating else { return false }
-        guard !sanitisedName.isEmpty else { return false }
+        guard !sanitisedName.isEmpty, nameRefusal == nil else { return false }
         return provider.missingRequired(values: values).isEmpty
     }
 
@@ -391,6 +407,7 @@ struct AddRemoteWizard: View {
 
     private func load() async {
         defer { loading = false }
+        existingNames = await model.existingRemoteNames()
         do { providers = try await model.availableProviders() }
         catch { self.error = error.localizedDescription }
     }
@@ -410,9 +427,11 @@ struct AddRemoteWizard: View {
             if provider.requiresOAuth {
                 // These ask questions that depend on earlier answers and then hand off
                 // to a browser, which a single form cannot express.
-                await apply(try await model.beginConfiguring(name: sanitisedName,
-                                                             type: provider.name,
-                                                             parameters: parameters))
+                let step = try await model.beginConfiguring(name: sanitisedName,
+                                                            type: provider.name,
+                                                            parameters: parameters)
+                createdByThisFlow = true
+                await apply(step)
             } else {
                 try await model.createRemote(name: sanitisedName, type: provider.name,
                                              parameters: parameters)

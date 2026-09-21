@@ -11,6 +11,15 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- Adding a remote with the name of one that already exists is refused, in the
+  wizard before Add is enabled and again underneath it. rclone replaces the
+  existing remote's settings and credentials in that case, and used to do so
+  without a word. The configuration is now also backed up alongside itself before
+  a remote is added, as it already was before one is deleted.
+  ([#110](https://github.com/mlaify/grrclone/issues/110))
+
 ## [0.8.0] - 2026-09-21
 
 ### Added
