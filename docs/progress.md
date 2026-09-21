@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.7.1 is released**, and installable two ways:
+**v0.8.0 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-291 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+347 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -39,10 +39,41 @@ did not before, and which was proved rather than assumed.
 | v0.6.1 | **Released** 2026-09-19 |
 | v0.7.0 | **Released** 2026-09-19 |
 | v0.7.1 | **Released** 2026-09-19 |
-| v0.8.0 | **In progress** — the safety fixes from the 2026-09-19 review |
+| v0.8.0 | **Released** 2026-09-21 |
 | v0.9.0 | Planned — robustness and polish |
 
 ## Releases
+
+### v0.8.0 — 2026-09-21
+
+The release the 2026-09-19 review asked for: eleven safety fixes and one feature, all
+in the mount and registry core. The shape of the work was the same `try?`-and-`?? []`
+family #71–#80 had been, found in the places that audit did not reach, and every
+finding died the same way — a test that failed against `main`, then a fix.
+
+- **Mount table reads fail closed** (#115) and **a mounted path is never mounted over**
+  (#108) — the mechanism behind three NFS mounts stacked on `~/Cloud`.
+- **Unmounts are decided by a second read of the table** (#116), and **a repair that
+  cannot unmount keeps its record** (#111).
+- **Duplicate names refused, as the filesystem compares** (#112); **an unreadable
+  connection list is quarantined, not overwritten** (#113); **memory follows disk**
+  (#121).
+- **Overlapping caches count as in use** (#114): a folder's cache sits inside its
+  remote's. Deleting a remote scans and purges the whole remote and takes its other
+  connections with it, disclosed first.
+- **Debug logs no longer carry remote passwords** (#109). rclone's rc trace at DEBUG
+  had them under a key the redaction did not know. Nine Codex rounds on that one:
+  out-of-order pipe chunks, multi-line PEM values, restart interleaving, `clear()`
+  between reads — each real, each now tested.
+- **Startup says what it could not clear** and **a failed start no longer erases the
+  crash record** (#117); **nothing that can touch a wedged mount runs on the main
+  actor** (#118).
+- **The menu offers to disconnect an unrecorded mount that carries grrclone's exact
+  fingerprint** (#105) — from `nfsstat -m`, gated on options, source and mount root,
+  behind a Cancel-default confirmation. Nothing is killed.
+
+Also arm64-only rclone to match the app (#122). 347 tests. Codex went silent on the
+last day; the final five PRs were merged on CI and a self-review, by decision.
 
 ### v0.7.1 — 2026-09-19
 
@@ -491,7 +522,7 @@ things in them are not waiting on us.
 | `v0.4.0` | Audit fixes, delete a remote, the changelog | closed, shipped 2026-09-18 |
 | `v0.5.0` | Transfer visibility, remote editing, cache control — shipped as 0.6.0 | closed |
 | `v0.7.0` | Daily update check, one permission, build provenance | closed, shipped 2026-09-19 |
-| `v0.8.0` | The 2026-09-19 review's safety fixes, and reclaiming fingerprinted mounts | open |
+| `v0.8.0` | The 2026-09-19 review's safety fixes, and reclaiming fingerprinted mounts | closed, shipped 2026-09-21 |
 | `v0.9.0` | Daemon exit detection, wizard hygiene, store honesty, arm64-only rclone | open |
 | `Blocked on adoption` | Ready to do, gated on something outside the code | never closes |
 | `Known limitations` | Documented, deliberately not fixed | never closes |

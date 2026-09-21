@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-21
+
 ### Added
 
 - The menu now offers to disconnect a volume that grrclone did not record making
@@ -81,8 +83,6 @@ thing was built the way it was, and what was tried and rejected — lives in
   stop a leftover background process while those volumes were still up. It now
   refuses to mount, to repair, or to stop anything until it can see the list.
   ([#115](https://github.com/mlaify/grrclone/issues/115))
-### Fixed
-
 - The log viewer no longer shows a remote's password in clear text at the Debug
   level. rclone traces every control call there, including the one that creates or
   edits a remote, and the trace carried the password under a key the redaction did
@@ -284,7 +284,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mlaify/grrclone/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/mlaify/grrclone/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/mlaify/grrclone/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/mlaify/grrclone/compare/v0.6.0...v0.6.1
