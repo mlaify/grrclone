@@ -50,6 +50,43 @@ public actor DaemonSupervisor {
     private let settings: DaemonSettings
     private var process: Process?
     private var pipes: [Pipe] = []
+
+    /// Called when the daemon exits without being asked to.
+    ///
+    /// A daemon that panics or is killed leaves every mount it served in the
+    /// kernel with no server behind it. Before this, nothing noticed until the
+    /// next sleep/wake, network change or a click on Check mounts; the activity
+    /// poller said "cannot reach rclone" every two seconds and repaired nothing
+    /// (#119). The handler is installed on the process *before* `run()` — see
+    /// `Shell` for why installing it afterwards can miss an exit that already
+    /// happened — and is not called for an exit `stop()` or a failed start
+    /// caused.
+    public typealias UnexpectedExit = @Sendable (_ pid: Int32) async -> Void
+    private var onUnexpectedExit: UnexpectedExit?
+    /// True while `stop()` is bringing the daemon down on purpose.
+    private var stopping = false
+
+    public func setOnUnexpectedExit(_ handler: @escaping UnexpectedExit) {
+        onUnexpectedExit = handler
+    }
+
+    /// The process's termination handler lands here, on the actor.
+    private func daemonExited(_ exited: Process) async {
+        // Only the daemon this supervisor currently owns, and only if nobody asked
+        // for it to go. A start that was abandoned has already cleared `process`.
+        guard let current = process, current === exited, !stopping else { return }
+        let pid = exited.processIdentifier
+        // It is gone; the record must not say otherwise, or the next start would
+        // refuse on a PID that may already belong to something else.
+        pidFile.clear()
+        stopDraining(pipes)
+        pipes = []
+        process = nil
+        client = nil
+        if let socketPath { try? FileManager.default.removeItem(atPath: socketPath) }
+        socketPath = nil
+        await onUnexpectedExit?(pid)
+    }
     /// One per drained pipe; finished when draining stops so the consumer task
     /// ends rather than waiting forever on a pipe nobody reads.
     private var drains: [AsyncStream<Data>.Continuation] = []
@@ -246,6 +283,12 @@ public actor DaemonSupervisor {
             })
         }
 
+        // Before `run()`, or an exit between launch and installation is missed.
+        process.terminationHandler = { [weak self] exited in
+            guard let self else { return }
+            Task { await self.daemonExited(exited) }
+        }
+
         do { try process.run() }
         catch {
             // The consumers above are already waiting on pipes that will never be
@@ -367,6 +410,8 @@ public actor DaemonSupervisor {
     /// NFS mount it serves is still live leaves the kernel talking to a dead server,
     /// which hangs Finder until the mount is forcibly removed.
     public func stop() async {
+        stopping = true
+        defer { stopping = false }
         if let client {
             try? await client.quit()
         }

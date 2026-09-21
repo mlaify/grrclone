@@ -400,6 +400,28 @@ final class AppModel: ObservableObject {
         }
         startWatchingForBreakage()
         startPollingActivity()
+        await startRepairingAfterDaemonExit()
+    }
+
+    /// A daemon that dies takes every mount with it; repair without waiting for a
+    /// wake or a click (#119). The timer is the backstop for a server that is
+    /// alive but wedged.
+    private func startRepairingAfterDaemonExit() async {
+        guard let manager else { return }
+        let report: @Sendable (ConnectionManager.HealthReport) async -> Void = { [weak self] report in
+            await MainActor.run {
+                guard let self else { return }
+                if !report.repaired.isEmpty {
+                    self.status = "rclone stopped unexpectedly; reconnected \(report.repaired.count) mount(s)"
+                } else if !report.failed.isEmpty {
+                    self.status = "\(report.failed.count) mount(s) need attention"
+                    self.lastError = report.failed.values.first
+                }
+            }
+            await self?.refresh()
+        }
+        await manager.installDaemonExitRepair(onRepaired: report)
+        await manager.startPeriodicHealthChecks(onRepaired: report)
     }
 
     private func requireClientRemotes() async throws -> [String] {
@@ -1206,6 +1228,9 @@ final class AppModel: ObservableObject {
         activityPoller?.cancel()
         activityPoller = nil
         guard let manager else { return .init() }
+        // Not during teardown: the daemon stopping on purpose is not an exit to
+        // repair, and a probe mid-unmount would fight the unmount.
+        await manager.stopPeriodicHealthChecks()
         return await manager.shutdown(drainTimeout: drainTimeout) { pending in
             Task { @MainActor in self.status = "Finishing uploads (\(pending) left)" }
         }
