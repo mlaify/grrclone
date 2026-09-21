@@ -11,7 +11,10 @@ final class DaemonLogRedactionTests: XCTestCase {
                       "the host must survive, or the line stops being useful: \(out)")
     }
 
-    /// Captured verbatim from rclone 1.75.1 at DEBUG, not invented.
+    /// Captured verbatim from rclone 1.75.1 at DEBUG, not invented — except the two
+    /// token values, which are stand-ins of the same length and character class.
+    /// The real ones were per-launch and long dead, but a credential-shaped string
+    /// in source trips the secret scanner and cannot be told from a live one.
     ///
     /// This test exists because the first version of it was invented. It asserted the
     /// shape `--rc-pass VALUE`, the redaction matched that shape, the test passed —
@@ -20,19 +23,19 @@ final class DaemonLogRedactionTests: XCTestCase {
     /// log in clear text. A test written from imagination proves only that the code
     /// agrees with the imagination.
     func testRedactsTheCommandLineRcloneActuallyEchoes() {
-        let line = #"2026/09/17 07:35:32 DEBUG : rclone: Version "v1.75.1" starting with parameters ["/opt/homebrew/bin/rclone" "rcd" "--rc-addr" "unix:///Users/x/rc.sock" "--rc-user" "rr5xrS6uijLDUgwxyo3qszKiXTQwhAUe" "--rc-pass" "roOiGfANU_SfyOGX4tL-TSjGj8fW0QE_" "--transfers" "8" "--log-level" "DEBUG"]"#
+        let line = #"2026/09/17 07:35:32 DEBUG : rclone: Version "v1.75.1" starting with parameters ["/opt/homebrew/bin/rclone" "rcd" "--rc-addr" "unix:///Users/x/rc.sock" "--rc-user" "FAKE-RC-USER-NOT-A-SECRET-000000" "--rc-pass" "FAKE-RC-PASS-NOT-A-SECRET-000000" "--transfers" "8" "--log-level" "DEBUG"]"#
         let out = DaemonLog.redact(line)
 
-        XCTAssertFalse(out.contains("rr5xrS6uijLDUgwxyo3qszKiXTQwhAUe"), "leaked rc-user: \(out)")
-        XCTAssertFalse(out.contains("roOiGfANU_SfyOGX4tL-TSjGj8fW0QE_"), "leaked rc-pass: \(out)")
+        XCTAssertFalse(out.contains("FAKE-RC-USER-NOT-A-SECRET-000000"), "leaked rc-user: \(out)")
+        XCTAssertFalse(out.contains("FAKE-RC-PASS-NOT-A-SECRET-000000"), "leaked rc-pass: \(out)")
         XCTAssertTrue(out.contains("--log-level"), "unrelated flags must survive")
         XCTAssertTrue(out.contains("v1.75.1"), "the version is diagnostic and must survive")
     }
 
     /// The other real line, where rclone redacts the password itself but not the user.
     func testRedactsTheAuthenticatedUserLine() {
-        let line = "2026/09/17 07:35:32 INFO  : Using --user rr5xrS6uijLDUgwxyo3qszKiXTQwhAUe --pass *** as authenticated user"
-        XCTAssertFalse(DaemonLog.redact(line).contains("rr5xrS6uijLDUgwxyo3qszKiXTQwhAUe"))
+        let line = "2026/09/17 07:35:32 INFO  : Using --user FAKE-RC-USER-NOT-A-SECRET-000000 --pass *** as authenticated user"
+        XCTAssertFalse(DaemonLog.redact(line).contains("FAKE-RC-USER-NOT-A-SECRET-000000"))
     }
 
     func testRedactsTheEqualsForm() {
