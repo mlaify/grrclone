@@ -135,9 +135,11 @@ struct MenuBarView: View {
                       ? "exclamationmark.triangle.fill" : "info.circle")
                     .foregroundStyle(report.needsAttention ? .orange : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(report.needsAttention
+                    Text(!report.shadowedPaths.isEmpty
                          ? "grrclone did not shut down cleanly, and found local files"
-                         : "grrclone did not shut down cleanly")
+                         : !report.unreadablePaths.isEmpty
+                           ? "grrclone did not shut down cleanly, and could not check every folder"
+                           : "grrclone did not shut down cleanly")
                         .font(.caption.weight(.medium))
                     Text(uncleanDetail(report))
                         .font(.caption2).foregroundStyle(.secondary)
