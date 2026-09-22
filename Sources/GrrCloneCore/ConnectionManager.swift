@@ -412,6 +412,17 @@ public actor ConnectionManager {
 
     // MARK: - Storage usage
 
+    /// The argument list for `rclone reveal`, with `--` before the value.
+    ///
+    /// An obscured value is base64-ish and begins with `-` about one time in seventy
+    /// (measured: 3 of 200), and rclone then parses it as a flag and fails. That
+    /// trap has bitten this project before, in the tests; without the terminator
+    /// one connection in seventy would have shown "could not reveal the stored
+    /// credential" in place of its usage.
+    static func revealArguments(for obscured: String) -> [String] {
+        ["reveal", "--", obscured]
+    }
+
     /// What the remote reports about its own usage — see `StorageUsage`.
     ///
     /// `.unreachable` when rclone could not be asked; `.notReported` when it could and
@@ -444,7 +455,7 @@ public actor ConnectionManager {
         if let obscured = config["pass"], !obscured.isEmpty {
             do {
                 let binary = await supervisor.rcloneBinary
-                let result = try await Shell.run(binary.path, ["reveal", obscured], timeout: 10)
+                let result = try await Shell.run(binary.path, Self.revealArguments(for: obscured), timeout: 10)
                 guard result.succeeded else {
                     return .unreachable("rclone could not reveal the stored credential.")
                 }
