@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-22
+
 ### Added
 
 - The menu shows, under each connection, what the storage reports about its own
@@ -317,7 +319,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/mlaify/grrclone/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/mlaify/grrclone/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mlaify/grrclone/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/mlaify/grrclone/compare/v0.7.0...v0.7.1
