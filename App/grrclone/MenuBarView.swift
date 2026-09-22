@@ -419,6 +419,7 @@ private struct ConnectionRow: View {
     @State private var hovering = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
             Image(systemName: row.state.symbolName)
                 .foregroundStyle(row.state.tint)
@@ -453,15 +454,58 @@ private struct ConnectionRow: View {
             .controlSize(.small)
             .disabled(isBusy)
         }
+
+        // What the storage reports about itself, when it reports anything: one thin
+        // bar per pool that has a cap, full width under the row so nothing is cut off.
+        // The full picture with soft limits and grace is in Settings. Storage that
+        // reports nothing adds nothing — the menu stays as short as it was.
+        if case .reported(let usage)? = model.storageUsage[row.id] {
+            ForEach(usage.categories.filter { $0.hardLimitBytes != nil }) { category in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(category.label)
+                        Spacer()
+                        Text(Self.describe(category))
+                            .foregroundStyle(Self.needsAttention(category) ? Color.orange : Color.secondary)
+                    }
+                    .font(.caption2)
+                    if let fraction = category.fractionUsed {
+                        ProgressView(value: fraction)
+                            .controlSize(.mini)
+                            .tint(Self.needsAttention(category) ? .orange : .accentColor)
+                    }
+                }
+                .padding(.leading, 22)   // under the text, past the status dot
+            }
+        }
+        }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(hovering ? Color.primary.opacity(0.06) : .clear)
         .onHover { hovering = $0 }
+        // Ask when the row appears — that is, when the menu opens. AppModel throttles
+        // repeat asks, so opening the menu several times a minute costs nothing.
+        .task(id: row.connection.id) { await model.refreshStorageUsage(for: row.connection) }
     }
 
     private var isBusy: Bool {
         if case .connecting = row.state { return true }
         return false
+    }
+
+    /// `1,003 GiB of 2 TiB`. Binary units on purpose: quotas are set in GiB/TiB, so the
+    /// number here matches the number the administrator set and the server's own page.
+    static func describe(_ category: StorageUsage.Category) -> String {
+        func fmt(_ bytes: Int64) -> String {
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
+        }
+        guard let hard = category.hardLimitBytes else { return "\(fmt(category.usedBytes)) used" }
+        return "\(fmt(category.usedBytes)) of \(fmt(hard))"
+    }
+
+    /// Past the soft limit, or within 15 % of the hard one.
+    static func needsAttention(_ category: StorageUsage.Category) -> Bool {
+        category.isOverSoftLimit || (category.fractionUsed ?? 0) >= 0.85
     }
 }
 

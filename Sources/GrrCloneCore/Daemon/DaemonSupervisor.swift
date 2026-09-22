@@ -104,6 +104,10 @@ public actor DaemonSupervisor {
     /// pipe — see `DaemonLog`.
     public let log = DaemonLog()
 
+    /// The rclone this supervisor runs. Exposed for one-shot commands that must use the
+    /// same binary as the daemon — `rclone reveal` for a stored credential, for example.
+    public var rcloneBinary: URL { binary }
+
     public init(binary: URL, settings: DaemonSettings = .init(), runtimeDirectory: URL? = nil) {
         self.binary = binary
         self.settings = settings

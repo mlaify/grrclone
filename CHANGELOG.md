@@ -11,6 +11,18 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Added
+
+- The menu shows, under each connection, what the storage reports about its own
+  usage — one thin bar per capped pool, `1,003 GiB of 2 TiB`, orange near a limit — and
+  the connection's settings show the full picture with soft limits and grace. The data is
+  what rclone's `about` returns for any backend that has it, or — for servers that
+  publish one — a small usage document at `<url>/.usage/usage.json`, fetched with
+  the remote's own credentials and showing one bar per limited pool (files, photos,
+  …) with soft and hard limits and grace. Storage that reports nothing says so;
+  storage that could not be asked says that instead of showing zero. The document
+  format is described in `docs/usage-json.md`. Asked on demand, never polled.
+
 ## [0.9.0] - 2026-09-21
 
 ### Fixed

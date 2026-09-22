@@ -410,6 +410,60 @@ public actor ConnectionManager {
         return result
     }
 
+    // MARK: - Storage usage
+
+    /// What the remote reports about its own usage — see `StorageUsage`.
+    ///
+    /// `.unreachable` when rclone could not be asked; `.notReported` when it could and
+    /// the remote offers neither `about` nor a usage document. For the document the
+    /// stored credential is revealed with the daemon's own rclone, used for one request
+    /// and dropped — never logged, never placed in a URL.
+    public func storageUsage(for connection: Connection,
+                             fetcher: StorageUsage.Fetcher = .init()) async -> StorageUsage.Outcome {
+        let client: RcloneRCClient
+        do { client = try await supervisor.requireClient() } catch {
+            return .unreachable(error.localizedDescription)
+        }
+
+        // 1. Whatever the backend itself can say. An error here is the normal answer for
+        //    a backend without `about`, so it is not reported as a failure.
+        if let about = try? await client.about(fs: "\(connection.remote):"),
+           let usage = StorageUsage.fromAbout(about) {
+            return .reported(usage)
+        }
+
+        // 2. The usage-document convention, only for remotes that have a URL to ask.
+        let config: [String: String]
+        do { config = try await client.remoteConfig(name: connection.remote) } catch {
+            return .unreachable(error.localizedDescription)
+        }
+        guard let urlString = config["url"], let url = URL(string: urlString) else { return .notReported }
+        guard url.scheme?.lowercased() == "https" else { return .notReported }
+        let user = config["user"] ?? ""
+        var password = ""
+        if let obscured = config["pass"], !obscured.isEmpty {
+            do {
+                let binary = await supervisor.rcloneBinary
+                let result = try await Shell.run(binary.path, ["reveal", obscured], timeout: 10)
+                guard result.succeeded else {
+                    return .unreachable("rclone could not reveal the stored credential.")
+                }
+                password = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                return .unreachable(error.localizedDescription)
+            }
+        }
+        do {
+            guard let usage = try await fetcher.usageDocument(baseURL: url, user: user, password: password)
+            else { return .notReported }
+            return .reported(usage)
+        } catch StorageUsage.Failure.insecureURL {
+            return .notReported
+        } catch {
+            return .unreachable(error.localizedDescription)
+        }
+    }
+
     /// Whether anything is serving from a cache that overlaps this filesystem's.
     ///
     /// By `fsSpec`, never by connection id. The cache directory is named from
