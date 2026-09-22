@@ -179,6 +179,19 @@ jobs:
             --keychain "$KEYCHAIN"
           rm -f /tmp/AuthKey.p8
 
+      # The hosted macOS image ships with several gigabytes of simulator runtimes
+      # this job never uses, and hdiutil has run out of disk on it twice — after the
+      # app was already signed and notarised, so the retry cost a second approval and
+      # a second notarisation. Removing what is not needed is cheaper than retrying.
+      - name: Make room on the runner
+        run: |
+          set -euo pipefail
+          df -h / | tail -1
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes 2>/dev/null || true
+          rm -rf ~/Library/Developer/CoreSimulator/Caches 2>/dev/null || true
+          sudo rm -rf /Users/runner/Library/Android 2>/dev/null || true
+          df -h / | tail -1
+
       # The same script used locally, so a release from CI and a release from a laptop
       # are the same artefact produced the same way.
       - name: Build, sign, notarise, staple

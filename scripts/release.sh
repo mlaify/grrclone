@@ -65,6 +65,14 @@ xcrun notarytool submit build/grrclone-app.zip \
 xcrun stapler staple "$APP" | tail -1 | sed 's/^/  /'
 
 step "Build the disk image"
+# Make room first. hdiutil failed with "No space left on device" on two of the last
+# three hosted-runner releases, each time after signing and notarisation had already
+# succeeded. The zip that was notarised and the build intermediates are the two
+# largest things this script left lying around, and neither is needed again: the
+# stapled app is the artefact from here on.
+rm -f build/grrclone-app.zip
+rm -rf build/Build/Intermediates.noindex
+df -h . | sed 's/^/  /'
 rm -rf "$STAGE" "$DMG"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
