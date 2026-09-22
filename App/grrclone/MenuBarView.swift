@@ -493,10 +493,11 @@ private struct ConnectionRow: View {
         return false
     }
 
-    /// `1.08 TB of 2.2 TB`, in the units Finder uses.
+    /// `1,003 GiB of 2 TiB`. Binary units on purpose: quotas are set in GiB/TiB, so the
+    /// number here matches the number the administrator set and the server's own page.
     static func describe(_ category: StorageUsage.Category) -> String {
         func fmt(_ bytes: Int64) -> String {
-            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
         }
         guard let hard = category.hardLimitBytes else { return "\(fmt(category.usedBytes)) used" }
         return "\(fmt(category.usedBytes)) of \(fmt(hard))"

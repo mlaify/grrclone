@@ -258,7 +258,7 @@ private struct StorageUsageSection: View {
 
     private static func describe(_ category: StorageUsage.Category) -> String {
         func fmt(_ bytes: Int64) -> String {
-            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
         }
         guard let hard = category.hardLimitBytes else { return "\(fmt(category.usedBytes)) used" }
         var text = "\(fmt(category.usedBytes)) of \(fmt(hard))"

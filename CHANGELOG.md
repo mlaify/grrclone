@@ -14,7 +14,7 @@ thing was built the way it was, and what was tried and rejected — lives in
 ### Added
 
 - The menu shows, under each connection, what the storage reports about its own
-  usage — one thin bar per capped pool, `1.08 TB of 2.2 TB`, orange near a limit — and
+  usage — one thin bar per capped pool, `1,003 GiB of 2 TiB`, orange near a limit — and
   the connection's settings show the full picture with soft limits and grace. The data is
   what rclone's `about` returns for any backend that has it, or — for servers that
   publish one — a small usage document at `<url>/.usage/usage.json`, fetched with
