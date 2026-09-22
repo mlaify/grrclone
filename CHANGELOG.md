@@ -13,7 +13,9 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ### Added
 
-- A connection's settings now show what the storage reports about its own usage:
+- The menu shows, under each connection, what the storage reports about its own
+  usage (`Files 1 TB of 2 TB · Photos 159 GB of 500 GB`, orange near a limit), and
+  the connection's settings show the full picture with soft limits and grace. The data is
   what rclone's `about` returns for any backend that has it, or — for servers that
   publish one — a small usage document at `<url>/.usage/usage.json`, fetched with
   the remote's own credentials and showing one bar per limited pool (files, photos,

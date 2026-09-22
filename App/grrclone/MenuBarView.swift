@@ -433,6 +433,17 @@ private struct ConnectionRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
+                // What the storage reports about itself, when it reports anything. One
+                // line, only the pools that have a cap; the full picture with soft
+                // limits and grace is in Settings. Storage that reports nothing adds
+                // no line at all — the menu stays as short as it was.
+                if case .reported(let usage)? = model.storageUsage[row.id],
+                   let summary = Self.usageSummary(usage) {
+                    Text(summary.text)
+                        .font(.caption2)
+                        .foregroundStyle(summary.attention ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
@@ -457,11 +468,27 @@ private struct ConnectionRow: View {
         .padding(.vertical, 4)
         .background(hovering ? Color.primary.opacity(0.06) : .clear)
         .onHover { hovering = $0 }
+        // Ask when the row appears — that is, when the menu opens. AppModel throttles
+        // repeat asks, so opening the menu several times a minute costs nothing.
+        .task(id: row.connection.id) { await model.refreshStorageUsage(for: row.connection) }
     }
 
     private var isBusy: Bool {
         if case .connecting = row.state { return true }
         return false
+    }
+
+    /// `Files 1 TB of 2 TB · Photos 159 GB of 500 GB`, or nil when nothing has a cap.
+    /// Orange when any pool is past its soft limit or 85 % of its hard one.
+    static func usageSummary(_ usage: StorageUsage) -> (text: String, attention: Bool)? {
+        func fmt(_ bytes: Int64) -> String {
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+        let capped = usage.categories.filter { $0.hardLimitBytes != nil }
+        guard !capped.isEmpty else { return nil }
+        let parts = capped.map { "\($0.label) \(fmt($0.usedBytes)) of \(fmt($0.hardLimitBytes!))" }
+        let attention = capped.contains { $0.isOverSoftLimit || ($0.fractionUsed ?? 0) >= 0.85 }
+        return (parts.joined(separator: " · "), attention)
     }
 }
 

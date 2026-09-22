@@ -242,7 +242,7 @@ private struct StorageUsageSection: View {
             }
             HStack {
                 Spacer()
-                Button("Refresh") { Task { await model.refreshStorageUsage(for: connection) } }
+                Button("Refresh") { Task { await model.refreshStorageUsage(for: connection, force: true) } }
                     .disabled(asking)
             }
         } header: {
