@@ -11,10 +11,17 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-22
+
 ### Fixed
 
 - Storage usage no longer reports "could not reveal the stored credential" for the
   roughly one remote in seventy whose stored password happens to begin with a dash.
+- Helper commands grrclone runs — mounting, unmounting, `ps`, `nfsstat`, `rclone
+  obscure` — no longer occasionally hang until their timeout for no reason. The wait
+  for a command to finish was made in a way that could miss the finish; it now cannot.
+  This is very likely what produced the occasional "could not tell whether the old
+  process is running" refusal at launch.
 
 ## [0.9.1] - 2026-09-22
 
@@ -324,7 +331,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/mlaify/grrclone/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/mlaify/grrclone/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/mlaify/grrclone/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mlaify/grrclone/compare/v0.7.1...v0.8.0
