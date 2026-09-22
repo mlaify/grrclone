@@ -419,6 +419,7 @@ private struct ConnectionRow: View {
     @State private var hovering = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
             Image(systemName: row.state.symbolName)
                 .foregroundStyle(row.state.tint)
@@ -433,17 +434,6 @@ private struct ConnectionRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
-                // What the storage reports about itself, when it reports anything. One
-                // line, only the pools that have a cap; the full picture with soft
-                // limits and grace is in Settings. Storage that reports nothing adds
-                // no line at all — the menu stays as short as it was.
-                if case .reported(let usage)? = model.storageUsage[row.id],
-                   let summary = Self.usageSummary(usage) {
-                    Text(summary.text)
-                        .font(.caption2)
-                        .foregroundStyle(summary.attention ? Color.orange : Color.secondary)
-                        .lineLimit(1)
-                }
             }
 
             Spacer()
@@ -464,6 +454,31 @@ private struct ConnectionRow: View {
             .controlSize(.small)
             .disabled(isBusy)
         }
+
+        // What the storage reports about itself, when it reports anything: one thin
+        // bar per pool that has a cap, full width under the row so nothing is cut off.
+        // The full picture with soft limits and grace is in Settings. Storage that
+        // reports nothing adds nothing — the menu stays as short as it was.
+        if case .reported(let usage)? = model.storageUsage[row.id] {
+            ForEach(usage.categories.filter { $0.hardLimitBytes != nil }) { category in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(category.label)
+                        Spacer()
+                        Text(Self.describe(category))
+                            .foregroundStyle(Self.needsAttention(category) ? Color.orange : Color.secondary)
+                    }
+                    .font(.caption2)
+                    if let fraction = category.fractionUsed {
+                        ProgressView(value: fraction)
+                            .controlSize(.mini)
+                            .tint(Self.needsAttention(category) ? .orange : .accentColor)
+                    }
+                }
+                .padding(.leading, 22)   // under the text, past the status dot
+            }
+        }
+        }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(hovering ? Color.primary.opacity(0.06) : .clear)
@@ -478,17 +493,18 @@ private struct ConnectionRow: View {
         return false
     }
 
-    /// `Files 1 TB of 2 TB · Photos 159 GB of 500 GB`, or nil when nothing has a cap.
-    /// Orange when any pool is past its soft limit or 85 % of its hard one.
-    static func usageSummary(_ usage: StorageUsage) -> (text: String, attention: Bool)? {
+    /// `1.08 TB of 2.2 TB`, in the units Finder uses.
+    static func describe(_ category: StorageUsage.Category) -> String {
         func fmt(_ bytes: Int64) -> String {
             ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         }
-        let capped = usage.categories.filter { $0.hardLimitBytes != nil }
-        guard !capped.isEmpty else { return nil }
-        let parts = capped.map { "\($0.label) \(fmt($0.usedBytes)) of \(fmt($0.hardLimitBytes!))" }
-        let attention = capped.contains { $0.isOverSoftLimit || ($0.fractionUsed ?? 0) >= 0.85 }
-        return (parts.joined(separator: " · "), attention)
+        guard let hard = category.hardLimitBytes else { return "\(fmt(category.usedBytes)) used" }
+        return "\(fmt(category.usedBytes)) of \(fmt(hard))"
+    }
+
+    /// Past the soft limit, or within 15 % of the hard one.
+    static func needsAttention(_ category: StorageUsage.Category) -> Bool {
+        category.isOverSoftLimit || (category.fractionUsed ?? 0) >= 0.85
     }
 }
 
