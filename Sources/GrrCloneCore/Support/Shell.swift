@@ -47,6 +47,16 @@ public enum Shell {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        // Exit is observed through a handler installed *before* `run()`, signalling a
+        // semaphore. Not `waitUntilExit()`: called from the Dispatch thread `Deadline`
+        // runs work on, it intermittently never returned — a two-millisecond `rclone
+        // obscure` hitting a ten-second timeout, `ps` timing out under #95, config
+        // encryption hitting sixty seconds — none reproducible in isolation, all the
+        // signature of a run loop spun on a worker thread. A handler set before launch
+        // cannot miss an exit, and a semaphore has no run loop to be starved of.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
         do { try process.run() }
         catch { throw Failure.launchFailed(error.localizedDescription) }
 
@@ -62,15 +72,13 @@ public enum Shell {
             (try? errHandle.readToEnd()) ?? Data()
         }
 
-        let exited = await Deadline.run(seconds: timeout) {
-            // Blocks a Dispatch thread, which is abandonable. `terminationHandler` is
-            // deliberately not used: if the process has already exited by the time it is
-            // installed, it may never fire, leaving the caller suspended forever.
-            process.waitUntilExit()
-            return true
+        let finished = await Deadline.run(seconds: timeout) {
+            // Blocks a Dispatch thread, which is abandonable, and returns the moment the
+            // handler above fires.
+            exited.wait(timeout: .now() + timeout) == .success
         } ?? false
 
-        guard exited else {
+        guard finished else {
             process.terminate()
             // SIGTERM can be ignored by a process blocked in an uninterruptible syscall,
             // which is precisely the case a timeout implies.

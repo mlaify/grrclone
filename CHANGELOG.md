@@ -11,6 +11,11 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- Storage usage no longer reports "could not reveal the stored credential" for the
+  roughly one remote in seventy whose stored password happens to begin with a dash.
+
 ## [0.9.1] - 2026-09-22
 
 ### Added
