@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.9.0 is released**, and installable two ways:
+**v0.9.2 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-354 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+281 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -43,6 +43,22 @@ did not before, and which was proved rather than assumed.
 | v0.9.0 | **Released** 2026-09-21 |
 
 ## Releases
+
+### v0.9.2 — 2026-09-22
+
+Two fixes from reviewing 0.9.1's storage-usage work.
+
+- `rclone reveal` is now given `--` before the stored credential; without it, the one
+  obscured value in seventy that begins with a dash read as a flag and the connection
+  showed "could not reveal" in place of its usage.
+- That fix's test caught something older: `Shell.run` waited for helper processes
+  with `waitUntilExit()` on a Dispatch worker thread, which intermittently never
+  returns — a two-millisecond `rclone obscure` hit a ten-second timeout. A
+  termination handler installed before `run()` and a bounded semaphore replace it,
+  for every helper the app runs. Very likely the real cause of the `ps` timeouts
+  behind #95.
+
+281 tests.
 
 ### v0.9.0 — 2026-09-21
 
