@@ -82,6 +82,18 @@ public actor RcloneRCClient {
         return object.compactMapValues { $0["type"]?.stringValue }
     }
 
+    // MARK: - Operations
+
+    /// The backend's own accounting of a remote, via `operations/about`.
+    ///
+    /// Not every backend implements it — rclone answers with an error for those, and a
+    /// WebDAV server without RFC 4331 quota properties is one — so callers treat a
+    /// thrown error as "not reported", never as zero. Fields are all optional bytes:
+    /// `total`, `used`, `free`, `trashed`, `other`.
+    public func about(fs: String) async throws -> JSONValue {
+        try await call("operations/about", ["fs": .string(fs)], timeout: 15)
+    }
+
     // MARK: - Serve
 
     public struct Server: Sendable {

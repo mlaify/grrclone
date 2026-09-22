@@ -756,6 +756,23 @@ final class AppModel: ObservableObject {
         cacheUsage = await manager.cacheUsage(for: connections)
     }
 
+    // MARK: - Storage usage
+
+    @Published private(set) var storageUsage: [UUID: StorageUsage.Outcome] = [:]
+    @Published private(set) var askingStorageUsage: Set<UUID> = []
+
+    /// Ask the remote what it reports, on demand: one `about` call and at most one small
+    /// HTTPS request, when the user opens the connection's settings or presses Refresh.
+    /// Not polled — a quota does not change every two seconds, and every request is a
+    /// request to the user's storage provider.
+    func refreshStorageUsage(for connection: Connection) async {
+        guard let manager else { return }
+        askingStorageUsage.insert(connection.id)
+        defer { askingStorageUsage.remove(connection.id) }
+        let outcome = await manager.storageUsage(for: connection)
+        storageUsage[connection.id] = outcome
+    }
+
     func clearCache(for connection: Connection) async {
         guard let manager else { return }
         do {

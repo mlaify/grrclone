@@ -999,3 +999,20 @@ alternative feasible?
 
 Open at the end of the session: signing and notarisation, which needs a Developer ID
 Application certificate.
+
+## Storage usage in a connection's settings (2026-09-22)
+
+The question was "how does a person find out how much of their quota they have used?" when
+the storage is a plain WebDAV server that implements no quota reporting. The obvious fix — a
+private endpoint the app knows about — is exactly the kind of estate-specific special casing
+CONTRIBUTING rules out, so it became two generic steps: ask rclone's `about` first (any
+backend, no grrclone knowledge of any of them), and fall back to an open document convention
+at a fixed relative path, fetched with the credentials the app already holds, silent when
+absent. Credentials are revealed from rclone's obscured form with the daemon's own rclone
+binary for one request and never leave memory or enter a URL. Parsing is a pure function fed
+captured bytes; the fetcher takes an injected transport; "reports nothing" and "could not be
+asked" are distinct outcomes, per the house rule. Rejected: implementing RFC 4331 in a proxy
+(the response is XML the proxy does not author), and fetching the document through
+`rclone cat` (the WebDAV backend stats the path with PROPFIND first, which a static endpoint
+cannot answer truthfully).
+

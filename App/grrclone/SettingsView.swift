@@ -196,6 +196,77 @@ struct SettingsView: View {
 ///
 /// Emits `Section`s rather than its own `Form`: it is placed inside the Connections
 /// tab's form, and a nested form draws a second inset background inside the first.
+/// What the remote reports about its own capacity — or, plainly, that it reports
+/// nothing. Filled on appearance and on Refresh, never on a poll (see
+/// `AppModel.refreshStorageUsage`).
+private struct StorageUsageSection: View {
+    let connection: Connection
+    @ObservedObject var model: AppModel
+
+    private var asking: Bool { model.askingStorageUsage.contains(connection.id) }
+
+    var body: some View {
+        Section {
+            switch model.storageUsage[connection.id] {
+            case .reported(let usage)?:
+                ForEach(usage.categories) { category in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(category.label).font(.caption.weight(.medium))
+                            Spacer()
+                            Text(Self.describe(category)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let fraction = category.fractionUsed {
+                            ProgressView(value: fraction)
+                                .tint(category.isOverSoftLimit || fraction >= 0.85 ? .orange : .accentColor)
+                        }
+                        if let grace = category.grace {
+                            Text("Over the soft limit — \(grace) of grace left before saves fail.")
+                                .font(.caption2).foregroundStyle(.orange)
+                        } else if category.isOverSoftLimit {
+                            Text("Over the soft limit — saves fail when the grace period ends.")
+                                .font(.caption2).foregroundStyle(.orange)
+                        }
+                    }
+                }
+            case .notReported?:
+                Text("This storage does not report usage.")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .unreachable(let why)?:
+                Text("Could not ask: \(why)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case nil:
+                Text(asking ? "Asking…" : "Not asked yet")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Refresh") { Task { await model.refreshStorageUsage(for: connection) } }
+                    .disabled(asking)
+            }
+        } header: {
+            Text("Storage usage")
+        } footer: {
+            Text("What the storage itself reports — through rclone, or through a usage "
+                 + "document the server publishes. Not every storage reports anything.")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .task(id: connection.id) { await model.refreshStorageUsage(for: connection) }
+    }
+
+    private static func describe(_ category: StorageUsage.Category) -> String {
+        func fmt(_ bytes: Int64) -> String {
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+        guard let hard = category.hardLimitBytes else { return "\(fmt(category.usedBytes)) used" }
+        var text = "\(fmt(category.usedBytes)) of \(fmt(hard))"
+        if let soft = category.softLimitBytes { text += " · soft \(fmt(soft))" }
+        return text
+    }
+}
+
 private struct ConnectionDetail: View {
     let connection: Connection
     @ObservedObject var model: AppModel
@@ -252,6 +323,8 @@ private struct ConnectionDetail: View {
                 Text("Files you save are cached here and uploaded in the background.")
                 .font(.caption).foregroundStyle(.secondary)
             }
+
+            StorageUsageSection(connection: connection, model: model)
 
             // Settings that only take effect at mount time were previously applied
             // silently: the form looked saved while the live volume kept the old name
