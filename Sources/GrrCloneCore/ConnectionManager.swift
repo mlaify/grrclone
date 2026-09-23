@@ -1003,6 +1003,8 @@ public actor ConnectionManager {
                 guard !Task.isCancelled, let self else { return }
                 guard await !self.activeMounts.isEmpty else { continue }
                 let report = await self.checkHealth()
+                // A skipped pass is neither noisy nor quiet; it changes nothing.
+                guard !report.skipped else { continue }
                 let noisy = !report.repaired.isEmpty || !report.failed.isEmpty || !report.slow.isEmpty
                 if noisy || lastWasNoisy { await onRepaired(report) }
                 lastWasNoisy = noisy
@@ -1022,10 +1024,16 @@ public actor ConnectionManager {
         /// Alive, but not within the short deadline — or busy uploading, so left
         /// alone on purpose. Worth a line in the menu, not a rebuild.
         public var slow: [UUID: String] = [:]
+        /// True when no pass ran because another was already in flight. Such a
+        /// report says nothing about any mount and must not be read as an
+        /// all-clear. Codex caught the UI doing exactly that.
+        public var skipped = false
 
         public init(healthy: [UUID] = [], repaired: [UUID] = [],
-                    failed: [UUID: String] = [:], slow: [UUID: String] = [:]) {
-            self.healthy = healthy; self.repaired = repaired; self.failed = failed; self.slow = slow
+                    failed: [UUID: String] = [:], slow: [UUID: String] = [:],
+                    skipped: Bool = false) {
+            self.healthy = healthy; self.repaired = repaired; self.failed = failed
+            self.slow = slow; self.skipped = skipped
         }
     }
 
@@ -1053,7 +1061,7 @@ public actor ConnectionManager {
         // Single flight. Actor reentrancy lets a second call interleave at every
         // await below; two passes tearing down and rebuilding the same mounts is
         // the damage this exists to prevent.
-        guard !healthCheckInFlight else { return report }
+        guard !healthCheckInFlight else { report.skipped = true; return report }
         healthCheckInFlight = true
         defer { healthCheckInFlight = false }
 
