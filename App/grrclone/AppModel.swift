@@ -418,6 +418,10 @@ final class AppModel: ObservableObject {
                     self.lastError = report.failed.values.first
                 } else if !report.slow.isEmpty {
                     self.status = "\(report.slow.count) mount(s) responding slowly"
+                } else if self.status.hasSuffix("responding slowly") {
+                    // The all-clear after a slow report. Only our own message is
+                    // replaced, not whatever else the status was saying.
+                    self.status = "Ready"
                 }
             }
             await self?.refresh()
