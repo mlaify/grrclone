@@ -969,7 +969,11 @@ public actor ConnectionManager {
     ) async {
         await supervisor.setOnUnexpectedExit { [weak self] _ in
             guard let self else { return }
-            let report = await self.checkHealth()
+            // The server behind every mount is known to be gone: there is nothing a
+            // second, longer probe could learn, and waiting through one per mount
+            // would leave the volumes dead for most of a minute each. Codex caught
+            // this on review of #146.
+            let report = await self.checkHealth(confirm: false)
             await onRepaired(report)
         }
     }
@@ -989,14 +993,19 @@ public actor ConnectionManager {
                                           onRepaired: @escaping @Sendable (HealthReport) async -> Void) {
         periodicHealthChecks?.cancel()
         periodicHealthChecks = Task { [weak self] in
+            // Whether the last report said anything. A quiet report is delivered
+            // once after a noisy one, so a "responding slowly" the UI is showing is
+            // cleared when the next check finds everything fine; a run of quiet
+            // reports after that says nothing, as before.
+            var lastWasNoisy = false
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 guard !Task.isCancelled, let self else { return }
                 guard await !self.activeMounts.isEmpty else { continue }
                 let report = await self.checkHealth()
-                if !report.repaired.isEmpty || !report.failed.isEmpty || !report.slow.isEmpty {
-                    await onRepaired(report)
-                }
+                let noisy = !report.repaired.isEmpty || !report.failed.isEmpty || !report.slow.isEmpty
+                if noisy || lastWasNoisy { await onRepaired(report) }
+                lastWasNoisy = noisy
             }
         }
     }
@@ -1033,8 +1042,13 @@ public actor ConnectionManager {
     /// leave a mount present in the kernel but unable to reach its server, in which case
     /// Finder shows a folder that hangs on every access. Detecting that and remounting is
     /// the difference between an app you trust on a laptop and one you restart daily.
+    /// - Parameters:
+    ///   - repair: whether to rebuild what is found dead, or only report it.
+    ///   - confirm: whether a missed probe must be confirmed by a second, longer
+    ///     one before a rebuild. Off only when the caller already knows the server
+    ///     is gone — the daemon-exit handler — where waiting would be pure delay.
     @discardableResult
-    public func checkHealth(repair: Bool = true) async -> HealthReport {
+    public func checkHealth(repair: Bool = true, confirm: Bool = true) async -> HealthReport {
         var report = HealthReport()
         // Single flight. Actor reentrancy lets a second call interleave at every
         // await below; two passes tearing down and rebuilding the same mounts is
@@ -1067,6 +1081,10 @@ public actor ConnectionManager {
                 // whatever the kernel path says right now, and it is left alone.
                 if let uploads = await uploadsInFlight(mount), uploads > 0 {
                     report.slow[id] = "slow to answer; \(uploads) upload(s) in flight, left alone"
+                    continue
+                }
+                guard confirm else {
+                    await repairIfAllowed(mount, repair: repair, into: &report)
                     continue
                 }
                 // Ask again, and give it real time. Only silence twice — the second

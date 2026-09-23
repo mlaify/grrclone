@@ -149,6 +149,55 @@ final class HealthToleranceTests: XCTestCase {
         XCTAssertEqual(probe.deadlines.count, 1, "no confirmation probe for a mount that is not there")
     }
 
+    /// The daemon-exit handler knows the server is gone. Making every mount sit
+    /// through a 45 s confirmation there would leave the volumes dead for most
+    /// of a minute each, serially. Codex caught this on review.
+    func testAKnownDaemonExitSkipsTheConfirmation() async throws {
+        let probe = ScriptedProbe([.unresponsive])
+        let transport = RecordingTransport()
+        let (manager, _) = try await makeManager(probe: probe, uploads: nil, transport: transport)
+
+        _ = await manager.checkHealth(confirm: false)
+
+        XCTAssertEqual(transport.unmounts.count, 1, "rebuilt on the first miss")
+        XCTAssertEqual(probe.deadlines, [ConnectionManager.probeDeadline], "no second probe")
+    }
+
+    /// An upload in flight still forbids the rebuild even without confirmation:
+    /// a daemon that answers about its uploads is not a daemon that exited.
+    func testUploadsInFlightForbidARebuildEvenWithoutConfirmation() async throws {
+        let probe = ScriptedProbe([.unresponsive])
+        let transport = RecordingTransport()
+        let (manager, _) = try await makeManager(probe: probe, uploads: 2, transport: transport)
+        _ = await manager.checkHealth(confirm: false)
+        XCTAssertEqual(transport.unmounts, [])
+    }
+
+    /// After a slow report the next quiet report is delivered, so the menu can
+    /// stop saying "responding slowly"; the quiet ones after that are not.
+    func testPeriodicCheckDeliversTheAllClearOnceAfterANoisyReport() async throws {
+        let probe = ScriptedProbe([.unresponsive, .healthy, .healthy, .healthy, .healthy, .healthy])
+        let transport = RecordingTransport()
+        let (manager, _) = try await makeManager(probe: probe, uploads: 0, transport: transport)
+
+        final class Delivered: @unchecked Sendable {
+            private let lock = NSLock()
+            private(set) var reports: [ConnectionManager.HealthReport] = []
+            func add(_ r: ConnectionManager.HealthReport) { lock.lock(); reports.append(r); lock.unlock() }
+        }
+        let delivered = Delivered()
+        await manager.startPeriodicHealthChecks(every: 0.05) { delivered.add($0) }
+        // Five checks' worth of time, plus slack for the scheduler.
+        try await Task.sleep(nanoseconds: 600_000_000)
+        await manager.stopPeriodicHealthChecks()
+
+        XCTAssertGreaterThanOrEqual(probe.deadlines.count, 4, "several checks ran: \(probe.deadlines)")
+        XCTAssertEqual(delivered.reports.count, 2, "the slow report and one all-clear, nothing more")
+        XCTAssertFalse(delivered.reports.first?.slow.isEmpty ?? true)
+        XCTAssertTrue(delivered.reports.last?.slow.isEmpty ?? false)
+        XCTAssertFalse(delivered.reports.last?.healthy.isEmpty ?? true)
+    }
+
     /// The timer is a backstop for a wedged server, not a heartbeat. Ninety
     /// seconds found a slow moment on a remote backend regularly; five minutes
     /// is the floor.

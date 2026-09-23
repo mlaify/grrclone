@@ -20,7 +20,10 @@ thing was built the way it was, and what was tried and rejected — lives in
   slow answer is now only reported; a rebuild needs a second silence of
   forty-five seconds, and never happens while an upload is in flight. The
   background check also runs every five minutes rather than every ninety
-  seconds. ([#146](https://github.com/mlaify/grrclone/issues/146))
+  seconds. When rclone itself has stopped, the volumes are rebuilt at once
+  without that second wait, and the "responding slowly" status clears when
+  the next check finds the volume fine.
+  ([#146](https://github.com/mlaify/grrclone/issues/146))
 
 ## [0.9.2] - 2026-09-22
 
