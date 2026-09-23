@@ -418,9 +418,10 @@ final class AppModel: ObservableObject {
                     self.lastError = report.failed.values.first
                 } else if !report.slow.isEmpty {
                     self.status = "\(report.slow.count) mount(s) responding slowly"
-                } else if self.status.hasSuffix("responding slowly") {
-                    // The all-clear after a slow report. Only our own message is
-                    // replaced, not whatever else the status was saying.
+                } else if !report.skipped, self.status.hasSuffix("responding slowly") {
+                    // The all-clear after a slow report, from a pass that actually
+                    // ran: a pass skipped for overlapping another says nothing. Only
+                    // our own message is replaced, not whatever else the status said.
                     self.status = "Ready"
                 }
             }

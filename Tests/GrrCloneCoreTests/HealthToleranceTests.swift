@@ -198,6 +198,40 @@ final class HealthToleranceTests: XCTestCase {
         XCTAssertFalse(delivered.reports.last?.healthy.isEmpty ?? true)
     }
 
+    /// A pass that did not run because another was in flight must say so, or
+    /// its empty report reads as "everything healthy" to whoever gets it.
+    func testAnOverlappingPassIsMarkedSkippedNotClean() async throws {
+        let transport = RecordingTransport()
+        let registry = MountRegistry(fileURL: dir.appendingPathComponent("mounts.json"))
+        let supervisor = DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"),
+                                          runtimeDirectory: dir)
+        // A probe that takes a while, so a second pass can arrive during the first.
+        let manager = ConnectionManager(supervisor: supervisor, registry: registry,
+                                        transports: [transport],
+                                        probe: { _, _ in
+                                            try? await Task.sleep(nanoseconds: 400_000_000)
+                                            return .healthy
+                                        },
+                                        uploadsInFlight: { _ in 0 })
+        let connection = Connection(remote: "dav1", displayName: "Cloud")
+        let point = dir.appendingPathComponent("Cloud")
+        try await registry.record(MountRegistry.Entry(
+            connectionID: connection.id, mountPoint: point.path, transport: "nfs",
+            serverID: "s1", port: 2049, pid: 1))
+        await manager.adoptActiveMountForTesting(
+            ConnectionManager.ActiveMount(connection: connection, serverID: "s1", mountPoint: point))
+
+        let first = Task { await manager.checkHealth() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let second = await manager.checkHealth()
+        let firstReport = await first.value
+
+        XCTAssertTrue(second.skipped, "the overlapping pass must be marked")
+        XCTAssertTrue(second.healthy.isEmpty)
+        XCTAssertFalse(firstReport.skipped)
+        XCTAssertEqual(firstReport.healthy, [connection.id])
+    }
+
     /// The timer is a backstop for a wedged server, not a heartbeat. Ninety
     /// seconds found a slow moment on a remote backend regularly; five minutes
     /// is the floor.
