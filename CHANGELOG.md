@@ -11,6 +11,17 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- A volume that is slow to answer is no longer treated as dead. Since 0.9.0 a
+  single lookup that took longer than five seconds was enough to disconnect and
+  rebuild the volume, which cancelled whatever was uploading at the time and
+  raised macOS's "server not responding" prompt for a volume that was fine. A
+  slow answer is now only reported; a rebuild needs a second silence of
+  forty-five seconds, and never happens while an upload is in flight. The
+  background check also runs every five minutes rather than every ninety
+  seconds. ([#146](https://github.com/mlaify/grrclone/issues/146))
+
 ## [0.9.2] - 2026-09-22
 
 ### Fixed
