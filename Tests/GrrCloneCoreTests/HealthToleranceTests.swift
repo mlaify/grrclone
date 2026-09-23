@@ -198,6 +198,32 @@ final class HealthToleranceTests: XCTestCase {
         XCTAssertFalse(delivered.reports.last?.healthy.isEmpty ?? true)
     }
 
+    /// The slow report may come from the menu or a wake, not the timer. The timer
+    /// still owes the all-clear. Codex caught the state living in the loop.
+    func testTheTimerDeliversTheAllClearForASlowReportFromAnotherTrigger() async throws {
+        let probe = ScriptedProbe([.unresponsive, .healthy])   // then healthy forever
+        let transport = RecordingTransport()
+        let (manager, connection) = try await makeManager(probe: probe, uploads: 0, transport: transport)
+
+        // As "Check mounts" in the menu would.
+        let manual = await manager.checkHealth()
+        XCTAssertNotNil(manual.slow[connection.id])
+
+        final class Delivered: @unchecked Sendable {
+            private let lock = NSLock()
+            private(set) var reports: [ConnectionManager.HealthReport] = []
+            func add(_ r: ConnectionManager.HealthReport) { lock.lock(); reports.append(r); lock.unlock() }
+        }
+        let delivered = Delivered()
+        await manager.startPeriodicHealthChecks(every: 0.05) { delivered.add($0) }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        await manager.stopPeriodicHealthChecks()
+
+        XCTAssertEqual(delivered.reports.count, 1, "exactly one all-clear: \(delivered.reports)")
+        XCTAssertEqual(delivered.reports.first?.healthy, [connection.id])
+        XCTAssertTrue(delivered.reports.first?.slow.isEmpty ?? false)
+    }
+
     /// A pass that did not run because another was in flight must say so, or
     /// its empty report reads as "everything healthy" to whoever gets it.
     func testAnOverlappingPassIsMarkedSkippedNotClean() async throws {
