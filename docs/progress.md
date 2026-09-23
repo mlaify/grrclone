@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.9.2 is released**, and installable two ways:
+**v0.9.3 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-281 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+293 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -43,6 +43,24 @@ did not before, and which was proved rather than assumed.
 | v0.9.0 | **Released** 2026-09-21 |
 
 ## Releases
+
+### v0.9.3 — 2026-09-23
+
+One fix, from a live symptom: `~/CloudVaults` kept raising macOS's "server not
+responding" prompt.
+
+- The health check added in 0.9.0 rebuilt a volume after a single lookup missed a
+  five-second deadline, every ninety seconds. Against a WebDAV backend on a
+  spinning-disk VPS that happens a few times a day; each rebuild cancelled the uploads
+  in flight (a 118 MB `vault.kdbx` among them) and left the kernel briefly without a
+  server, which is the prompt. A short miss is now only reported; a rebuild needs a
+  second 45 s miss and never happens while uploads are in flight; the timer runs every
+  five minutes. A daemon that has actually exited is still repaired at once. Codex
+  found three follow-ups on review (skip the confirmation after a known exit, mark a
+  pass skipped for overlap so it is not read as an all-clear, owe the all-clear for a
+  slow report from any trigger), all in.
+
+293 tests.
 
 ### v0.9.2 — 2026-09-22
 

@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-09-23
+
 ### Fixed
 
 - A volume that is slow to answer is no longer treated as dead. Since 0.9.0 a
@@ -345,7 +347,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/mlaify/grrclone/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/mlaify/grrclone/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/mlaify/grrclone/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/mlaify/grrclone/compare/v0.8.0...v0.9.0
