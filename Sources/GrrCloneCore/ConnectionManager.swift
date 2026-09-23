@@ -1095,6 +1095,11 @@ public actor ConnectionManager {
             report.failed[id] = "not responding"
             return
         }
+        // Up to fifty seconds of probing have passed since `active` was read, and
+        // the actor was open the whole time. A Disconnect clicked meanwhile has
+        // already taken this mount down; rebuilding it now would bring back a
+        // volume the user just removed.
+        guard active[id]?.serverID == mount.serverID else { return }
         do {
             try await reconnect(mount)
             report.repaired.append(id)
