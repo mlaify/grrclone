@@ -956,6 +956,11 @@ public actor ConnectionManager {
     /// a second pass that tears down what the first is rebuilding.
     private var healthCheckInFlight = false
     private var periodicHealthChecks: Task<Void, Never>?
+    /// Whether the last completed pass — from any trigger: timer, wake, the menu,
+    /// a daemon exit — had something to say. The timer delivers one quiet report
+    /// after that, so a "responding slowly" the UI is showing gets its all-clear
+    /// whoever produced it. Codex found the first version kept this per loop.
+    private var lastHealthReportWasNoisy = false
 
     /// Repair everything when the daemon dies out from under its mounts.
     ///
@@ -993,21 +998,18 @@ public actor ConnectionManager {
                                           onRepaired: @escaping @Sendable (HealthReport) async -> Void) {
         periodicHealthChecks?.cancel()
         periodicHealthChecks = Task { [weak self] in
-            // Whether the last report said anything. A quiet report is delivered
-            // once after a noisy one, so a "responding slowly" the UI is showing is
-            // cleared when the next check finds everything fine; a run of quiet
-            // reports after that says nothing, as before.
-            var lastWasNoisy = false
+            // A quiet report is delivered once after a noisy one, so a "responding
+            // slowly" the UI is showing is cleared when the next check finds
+            // everything fine; a run of quiet reports after that says nothing.
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 guard !Task.isCancelled, let self else { return }
                 guard await !self.activeMounts.isEmpty else { continue }
+                let owedAnAllClear = await self.lastHealthReportWasNoisy
                 let report = await self.checkHealth()
                 // A skipped pass is neither noisy nor quiet; it changes nothing.
                 guard !report.skipped else { continue }
-                let noisy = !report.repaired.isEmpty || !report.failed.isEmpty || !report.slow.isEmpty
-                if noisy || lastWasNoisy { await onRepaired(report) }
-                lastWasNoisy = noisy
+                if report.isNoisy || owedAnAllClear { await onRepaired(report) }
             }
         }
     }
@@ -1028,6 +1030,9 @@ public actor ConnectionManager {
         /// report says nothing about any mount and must not be read as an
         /// all-clear. Codex caught the UI doing exactly that.
         public var skipped = false
+
+        /// Anything worth telling the user about.
+        public var isNoisy: Bool { !repaired.isEmpty || !failed.isEmpty || !slow.isEmpty }
 
         public init(healthy: [UUID] = [], repaired: [UUID] = [],
                     failed: [UUID: String] = [:], slow: [UUID: String] = [:],
@@ -1063,7 +1068,10 @@ public actor ConnectionManager {
         // the damage this exists to prevent.
         guard !healthCheckInFlight else { report.skipped = true; return report }
         healthCheckInFlight = true
-        defer { healthCheckInFlight = false }
+        defer {
+            healthCheckInFlight = false
+            lastHealthReportWasNoisy = report.isNoisy
+        }
 
         for mount in active.values {
             let id = mount.connection.id
