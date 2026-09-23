@@ -22,7 +22,15 @@ public actor ConnectionManager {
     private let transports: [TransportKind: any MountTransport]
     private let mountTable: SystemMounts.Reader
     private let fingerprints: NFSFingerprint.Reader
+    private let probe: HealthProbe
+    private let uploadsInFlight: UploadsInFlight
     private var active: [UUID: ActiveMount] = [:]
+
+    /// How a mount is probed for liveness. `MountHealth.probe` outside tests.
+    public typealias HealthProbe = @Sendable (_ mountPoint: URL, _ timeout: TimeInterval) async -> MountHealth.Status
+    /// How many uploads a mount's VFS has queued or in progress, or nil when the
+    /// daemon cannot say. Asked before a rebuild, which would cancel them.
+    public typealias UploadsInFlight = @Sendable (ActiveMount) async -> Int?
 
     /// Filesystems with a mount in progress.
     ///
@@ -54,13 +62,21 @@ public actor ConnectionManager {
                 cacheRoot: URL? = nil,
                 transports: [any MountTransport] = [NFSTransport()],
                 mountTable: @escaping SystemMounts.Reader = { try await SystemMounts.current() },
-                fingerprints: @escaping NFSFingerprint.Reader = { try await NFSFingerprint.current() }) {
+                fingerprints: @escaping NFSFingerprint.Reader = { try await NFSFingerprint.current() },
+                probe: @escaping HealthProbe = { await MountHealth.probe($0, timeout: $1) },
+                uploadsInFlight: UploadsInFlight? = nil) {
         self.supervisor = supervisor
         self.registry = registry
         self.cacheRoot = cacheRoot ?? Self.defaultCacheRoot()
         self.transports = Dictionary(uniqueKeysWithValues: transports.map { ($0.kind, $0) })
         self.mountTable = mountTable
         self.fingerprints = fingerprints
+        self.probe = probe
+        self.uploadsInFlight = uploadsInFlight ?? { [supervisor] mount in
+            guard let client = try? await supervisor.requireClient(),
+                  let stats = try? await client.vfsStats(fs: mount.connection.fsSpec) else { return nil }
+            return stats.pendingUploads
+        }
     }
 
     /// Teach the supervisor to bring our mounts down before it kills an orphaned
@@ -961,7 +977,15 @@ public actor ConnectionManager {
     /// Probe on a timer as a backstop for a server that is alive but wedged, which
     /// no exit handler will ever report. Only while something is mounted, and
     /// never overlapping another pass.
-    public func startPeriodicHealthChecks(every interval: TimeInterval = 90,
+    ///
+    /// Five minutes, not ninety seconds. Each probe is an uncached lookup that the
+    /// backend has to answer, and a remote server on a spinning disk answers a
+    /// root listing slowly now and then; probing it every ninety seconds found
+    /// such a moment regularly and rebuilt a mount that was fine (#146). The exit
+    /// handler covers the daemon dying at once; this only has to catch a wedge.
+    public static let periodicHealthCheckInterval: TimeInterval = 300
+
+    public func startPeriodicHealthChecks(every interval: TimeInterval = periodicHealthCheckInterval,
                                           onRepaired: @escaping @Sendable (HealthReport) async -> Void) {
         periodicHealthChecks?.cancel()
         periodicHealthChecks = Task { [weak self] in
@@ -970,7 +994,9 @@ public actor ConnectionManager {
                 guard !Task.isCancelled, let self else { return }
                 guard await !self.activeMounts.isEmpty else { continue }
                 let report = await self.checkHealth()
-                if !report.repaired.isEmpty || !report.failed.isEmpty { await onRepaired(report) }
+                if !report.repaired.isEmpty || !report.failed.isEmpty || !report.slow.isEmpty {
+                    await onRepaired(report)
+                }
             }
         }
     }
@@ -984,7 +1010,22 @@ public actor ConnectionManager {
         public var healthy: [UUID] = []
         public var repaired: [UUID] = []
         public var failed: [UUID: String] = [:]
+        /// Alive, but not within the short deadline — or busy uploading, so left
+        /// alone on purpose. Worth a line in the menu, not a rebuild.
+        public var slow: [UUID: String] = [:]
+
+        public init(healthy: [UUID] = [], repaired: [UUID] = [],
+                    failed: [UUID: String] = [:], slow: [UUID: String] = [:]) {
+            self.healthy = healthy; self.repaired = repaired; self.failed = failed; self.slow = slow
+        }
     }
+
+    /// The first probe's deadline. A miss here is a report, never an action.
+    public static let probeDeadline: TimeInterval = 5
+    /// The second probe's deadline, before a rebuild. Long enough for a remote
+    /// backend to finish a slow listing; short enough that a dead server is
+    /// still repaired well before the kernel's own three-minute soft-mount alarm.
+    public static let confirmationDeadline: TimeInterval = 45
 
     /// Probe every active mount and repair the ones that have stopped responding.
     ///
@@ -1003,30 +1044,63 @@ public actor ConnectionManager {
         defer { healthCheckInFlight = false }
 
         for mount in active.values {
-            switch await MountHealth.probe(mount.mountPoint) {
+            let id = mount.connection.id
+            switch await probe(mount.mountPoint, Self.probeDeadline) {
             case .healthy:
-                report.healthy.append(mount.connection.id)
+                report.healthy.append(id)
 
             case .unknown:
                 // Nothing was established, so nothing is done. Tearing a mount down
                 // and rebuilding it on a guess is the kind of repair that causes the
                 // damage it claims to fix.
-                report.failed[mount.connection.id] = "could not read the mount table"
+                report.failed[id] = "could not read the mount table"
 
-            case .unresponsive, .gone:
-                guard repair else {
-                    report.failed[mount.connection.id] = "not responding"
+            case .gone:
+                // Not in the mount table: there is nothing to be slow. Rebuild.
+                await repairIfAllowed(mount, repair: repair, into: &report)
+
+            case .unresponsive:
+                // One missed lookup within five seconds is not a dead server. It is
+                // what a remote backend on a slow disk looks like a few times a day,
+                // and rebuilding on it cancelled the very uploads the mount existed
+                // to carry (#146). So: is the VFS visibly working? Then it is alive,
+                // whatever the kernel path says right now, and it is left alone.
+                if let uploads = await uploadsInFlight(mount), uploads > 0 {
+                    report.slow[id] = "slow to answer; \(uploads) upload(s) in flight, left alone"
                     continue
                 }
-                do {
-                    try await reconnect(mount)
-                    report.repaired.append(mount.connection.id)
-                } catch {
-                    report.failed[mount.connection.id] = error.localizedDescription
+                // Ask again, and give it real time. Only silence twice — the second
+                // time for the better part of a minute — earns a rebuild.
+                switch await probe(mount.mountPoint, Self.confirmationDeadline) {
+                case .healthy:
+                    report.slow[id] = "answered, but took longer than \(Int(Self.probeDeadline)) seconds"
+                case .unknown:
+                    report.failed[id] = "could not read the mount table"
+                case .gone, .unresponsive:
+                    // The upload check is repeated: the first answer is up to 45 s old.
+                    if let uploads = await uploadsInFlight(mount), uploads > 0 {
+                        report.slow[id] = "not answering; \(uploads) upload(s) still in flight, left alone"
+                        continue
+                    }
+                    await repairIfAllowed(mount, repair: repair, into: &report)
                 }
             }
         }
         return report
+    }
+
+    private func repairIfAllowed(_ mount: ActiveMount, repair: Bool, into report: inout HealthReport) async {
+        let id = mount.connection.id
+        guard repair else {
+            report.failed[id] = "not responding"
+            return
+        }
+        do {
+            try await reconnect(mount)
+            report.repaired.append(id)
+        } catch {
+            report.failed[id] = error.localizedDescription
+        }
     }
 
     /// Tear a broken mount fully down and build it again.

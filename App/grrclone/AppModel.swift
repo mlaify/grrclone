@@ -416,6 +416,8 @@ final class AppModel: ObservableObject {
                 } else if !report.failed.isEmpty {
                     self.status = "\(report.failed.count) mount(s) need attention"
                     self.lastError = report.failed.values.first
+                } else if !report.slow.isEmpty {
+                    self.status = "\(report.slow.count) mount(s) responding slowly"
                 }
             }
             await self?.refresh()
@@ -1289,6 +1291,8 @@ final class AppModel: ObservableObject {
                     } else if !report.failed.isEmpty {
                         self.status = "\(report.failed.count) mount(s) need attention"
                         self.lastError = report.failed.values.first
+                    } else if !report.slow.isEmpty {
+                        self.status = "\(report.slow.count) mount(s) responding slowly"
                     } else {
                         self.status = "Ready"
                     }
@@ -1435,9 +1439,13 @@ final class AppModel: ObservableObject {
         Task.detached { [manager] in
             guard let report = await manager?.checkHealth() else { return }
             await MainActor.run {
-                self.status = report.failed.isEmpty
-                    ? "All \(report.healthy.count + report.repaired.count) mount(s) healthy"
-                    : "\(report.failed.count) mount(s) need attention"
+                if !report.failed.isEmpty {
+                    self.status = "\(report.failed.count) mount(s) need attention"
+                } else if !report.slow.isEmpty {
+                    self.status = "\(report.slow.count) mount(s) responding slowly"
+                } else {
+                    self.status = "All \(report.healthy.count + report.repaired.count) mount(s) healthy"
+                }
             }
             await self.refresh()
         }
