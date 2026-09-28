@@ -260,6 +260,7 @@ large directories.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — including the rules that are not negotiable
 - [SECURITY.md](SECURITY.md)
 - [mlaify.io](https://mlaify.io) — M&L AI, the home of grrclone and its sibling projects
+- [github.com/mlaify](https://github.com/mlaify) — the M&L AI organization and its other projects
 
 ## Prior art
 
