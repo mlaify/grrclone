@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.9.3 is released**, and installable two ways:
+**v0.9.4 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-293 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+384 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -43,6 +43,24 @@ did not before, and which was proved rather than assumed.
 | v0.9.0 | **Released** 2026-09-21 |
 
 ## Releases
+
+### v0.9.4 — 2026-09-30
+
+A security fix: no secret on a command line any more (#156).
+
+- macOS lets every local account read every other account's process arguments. The
+  daemon's rc credentials were passed as `--rc-user`/`--rc-pass` for the app's whole
+  life; they now go in a `0600` `--rc-htpasswd` file holding a SHA-1 of a per-launch
+  random password, removed on stop, on unexpected exit and on every failed start
+  (rclone re-reads it per request, so it cannot go sooner).
+- Storage usage ran `rclone reveal -- <obscured>`, briefly putting the WebDAV password
+  in the process list (obscuring is reversible by anyone). `RcloneObscure` now reverses
+  it in process, tested against rclone in both directions.
+- Codex found one gap (a start whose socket never appears left the file behind); fixed
+  with a test that fails without it. Codex code and security reviews clean.
+
+384 tests (counted as `func test` across the tree; earlier entries here used the
+package's executed count).
 
 ### v0.9.3 — 2026-09-23
 
