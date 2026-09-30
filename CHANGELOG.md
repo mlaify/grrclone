@@ -11,6 +11,8 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-09-30
+
 ### Security
 
 - No password appears in grrclone's process arguments any more. macOS lets every
@@ -358,7 +360,8 @@ First release. Signed, notarised, and installable from a Homebrew tap or a DMG.
   network change.
 - Tears mounts down in the right order at quit, so Finder never hangs on a dead server.
 
-[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/mlaify/grrclone/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/mlaify/grrclone/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/mlaify/grrclone/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/mlaify/grrclone/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/mlaify/grrclone/compare/v0.9.0...v0.9.1
