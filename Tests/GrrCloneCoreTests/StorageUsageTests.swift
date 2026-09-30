@@ -79,38 +79,15 @@ final class StorageUsageTests: XCTestCase {
 
     // MARK: - Revealing the stored credential
 
-    /// `--` before the value, always: an obscured value can begin with `-`.
-    func testRevealTerminatesFlagParsing() {
-        XCTAssertEqual(ConnectionManager.revealArguments(for: "-abc"), ["reveal", "--", "-abc"])
-    }
-
-    /// Against the real rclone: obscure until a value that starts with `-` turns up,
-    /// then reveal it through the same argument list the app uses. The bare form
-    /// is shown to fail on that value, so this test is known to be able to fail.
-    func testADashLeadingObscuredValueRevealsWithTheAppsArguments() async throws {
-        let candidates = [
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("App/grrclone/Resources/rclone"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/rclone"),
-            URL(fileURLWithPath: "/usr/local/bin/rclone"),
-        ]
-        guard let rclone = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
-            throw XCTSkip("no rclone binary found")
-        }
-        var obscured: String?
-        for attempt in 0..<600 {
-            let out = try await Shell.run(rclone.path, ["obscure", "--", "example-\(attempt)"], timeout: 10)
-            let value = out.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.hasPrefix("-") { obscured = value; break }
-        }
-        let value = try XCTUnwrap(obscured, "600 obscures produced no dash-leading value; the odds say ~9 should")
-
-        let bare = try await Shell.run(rclone.path, ["reveal", value], timeout: 10)
-        XCTAssertFalse(bare.succeeded, "the bare form must fail on this value, or the fix is untested")
-
-        let terminated = try await Shell.run(rclone.path, ConnectionManager.revealArguments(for: value), timeout: 10)
-        XCTAssertTrue(terminated.succeeded, terminated.stderr)
-        XCTAssertTrue(terminated.stdout.hasPrefix("example-"), terminated.stdout)
+    /// The credential is revealed in process, never by running `rclone reveal` with
+    /// it on a command line (#156). The round trip against the real rclone lives in
+    /// ObscureTests; this pins the call site to the in-process codec.
+    func testStorageUsageDoesNotRunRevealAsAProcess() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/GrrCloneCore/ConnectionManager.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("\"reveal\""), "a `reveal` argument list is back in ConnectionManager")
+        XCTAssertTrue(source.contains("RcloneObscure.reveal("))
     }
 
     // MARK: - Fetcher, with a stubbed transport

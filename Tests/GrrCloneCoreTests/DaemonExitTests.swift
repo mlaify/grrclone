@@ -96,4 +96,67 @@ final class DaemonExitTests: XCTestCase {
 
         XCTAssertNil(fired.get(), "stop() must not be reported as an unexpected exit")
     }
+
+    // MARK: - No secret on the command line (#156)
+
+    private func commandLine(of pid: Int32) async throws -> String {
+        let out = try await Shell.run("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)], timeout: 10)
+        return out.stdout
+    }
+
+    /// Every local account can read a process's arguments on macOS. The daemon's
+    /// must carry a path to the credential, never the credential.
+    func testTheDaemonsArgumentsCarryNoCredential() async throws {
+        let (supervisor, pid) = try await startedSupervisor()
+        let args = try await commandLine(of: pid)
+        XCTAssertFalse(args.isEmpty, "could not read the daemon's arguments, so this proves nothing")
+        XCTAssertFalse(args.contains("--rc-pass"), "password on the command line: \(args)")
+        XCTAssertFalse(args.contains("--rc-user"), "user on the command line: \(args)")
+        XCTAssertTrue(args.contains("--rc-htpasswd"), args)
+
+        let file = dir.appendingPathComponent(RcAuthFile.fileName)
+        let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600, "the credential file must be this user's alone")
+        let contents = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(contents.contains(":{SHA}"), "a hash, not the password")
+
+        // And the daemon actually authenticates with it.
+        let version = try await supervisor.requireClient().version()
+        XCTAssertTrue(version.meetsMinimum)
+
+        await supervisor.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "stop() must remove the credential file")
+    }
+
+    /// A daemon that dies takes its credential file with it too.
+    func testAnUnexpectedExitRemovesTheCredentialFile() async throws {
+        let (supervisor, pid) = try await startedSupervisor()
+        let fired = Flag()
+        await supervisor.setOnUnexpectedExit { fired.set($0) }
+        let file = dir.appendingPathComponent(RcAuthFile.fileName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+
+        kill(pid, SIGKILL)
+        _ = await wait(for: fired, seconds: 5)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// A link planted at the path is replaced, never written through.
+    func testTheCredentialFileIsNotWrittenThroughASymlink() throws {
+        let target = dir.appendingPathComponent("elsewhere")
+        let path = dir.appendingPathComponent(RcAuthFile.fileName)
+        try "untouched".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: path, withDestinationURL: target)
+
+        try RcAuthFile.write(user: "u", password: "p", to: path)
+
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "untouched")
+        let type = try FileManager.default.attributesOfItem(atPath: path.path)[.type] as? FileAttributeType
+        XCTAssertEqual(type, .typeRegular)
+    }
+
+    func testTheLineIsAnHtpasswdSHA1Entry() {
+        // SHA-1("abc") = a9993e36...; base64 of that digest is qZk+NkcGgWq6PiVxeFDCbJzQ2J0=
+        XCTAssertEqual(RcAuthFile.line(user: "u", password: "abc"), "u:{SHA}qZk+NkcGgWq6PiVxeFDCbJzQ2J0=\n")
+    }
 }
