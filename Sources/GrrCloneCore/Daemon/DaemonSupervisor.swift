@@ -226,7 +226,13 @@ public actor DaemonSupervisor {
         let user = try Self.randomToken()
         let password = try Self.randomToken()
         // The credential goes in a 0600 file, never on the command line (#156).
+        // Removed on every path out of here that does not end in a running daemon —
+        // one guard for all of them, because the failure paths below are several and
+        // not all of them reach `abandonPartialStart` (Codex found the socket-wait
+        // one). On success it stays: rclone re-reads it on every request.
         try RcAuthFile.write(user: user, password: password, to: authFileURL)
+        var daemonOwnsAuthFile = false
+        defer { if !daemonOwnsAuthFile { RcAuthFile.remove(at: authFileURL) } }
 
         let process = Process()
         process.executableURL = binary
@@ -302,7 +308,6 @@ public actor DaemonSupervisor {
             // written; end them, or every retry after a persistent launch failure
             // leaks two tasks and their streams.
             stopDraining([errPipe, outPipe])
-            RcAuthFile.remove(at: authFileURL)
             throw Failure.didNotStart(error.localizedDescription)
         }
 
@@ -348,6 +353,7 @@ public actor DaemonSupervisor {
         // Last, after everything that can throw: from here the session is real.
         session.begin()
         startedCleanly = true
+        daemonOwnsAuthFile = true
         return client
     }
 
