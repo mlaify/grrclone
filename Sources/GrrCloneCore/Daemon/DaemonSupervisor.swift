@@ -47,6 +47,8 @@ public actor DaemonSupervisor {
 
     private let binary: URL
     private let runtimeDirectory: URL
+    /// Where the control socket's credential lives while the daemon runs.
+    private var authFileURL: URL { runtimeDirectory.appendingPathComponent(RcAuthFile.fileName) }
     private let settings: DaemonSettings
     private var process: Process?
     private var pipes: [Pipe] = []
@@ -85,6 +87,7 @@ public actor DaemonSupervisor {
         client = nil
         if let socketPath { try? FileManager.default.removeItem(atPath: socketPath) }
         socketPath = nil
+        RcAuthFile.remove(at: authFileURL)
         await onUnexpectedExit?(pid)
     }
     /// One per drained pipe; finished when draining stops so the consumer task
@@ -104,9 +107,6 @@ public actor DaemonSupervisor {
     /// pipe — see `DaemonLog`.
     public let log = DaemonLog()
 
-    /// The rclone this supervisor runs. Exposed for one-shot commands that must use the
-    /// same binary as the daemon — `rclone reveal` for a stored credential, for example.
-    public var rcloneBinary: URL { binary }
 
     public init(binary: URL, settings: DaemonSettings = .init(), runtimeDirectory: URL? = nil) {
         self.binary = binary
@@ -225,6 +225,8 @@ public actor DaemonSupervisor {
 
         let user = try Self.randomToken()
         let password = try Self.randomToken()
+        // The credential goes in a 0600 file, never on the command line (#156).
+        try RcAuthFile.write(user: user, password: password, to: authFileURL)
 
         let process = Process()
         process.executableURL = binary
@@ -235,8 +237,9 @@ public actor DaemonSupervisor {
         process.arguments = [
             "rcd",
             "--rc-addr", "unix://\(socket)",
-            "--rc-user", user,
-            "--rc-pass", password,
+            // Not --rc-user/--rc-pass: every local account can read a process's
+            // arguments on macOS. See RcAuthFile.
+            "--rc-htpasswd", authFileURL.path,
             "--cache-dir", settings.cacheDirectory.path,
             "--transfers", String(settings.transfers),
             "--checkers", String(settings.checkers),
@@ -299,6 +302,7 @@ public actor DaemonSupervisor {
             // written; end them, or every retry after a persistent launch failure
             // leaks two tasks and their streams.
             stopDraining([errPipe, outPipe])
+            RcAuthFile.remove(at: authFileURL)
             throw Failure.didNotStart(error.localizedDescription)
         }
 
@@ -367,6 +371,7 @@ public actor DaemonSupervisor {
         self.socketPath = nil
         pidFile.clear()
         try? FileManager.default.removeItem(atPath: socket)
+        RcAuthFile.remove(at: authFileURL)
     }
 
     /// PID of a daemon reaped at startup, if any. Surfaced so callers can report that a
@@ -429,6 +434,7 @@ public actor DaemonSupervisor {
         stopDraining(pipes)
         pipes = []
         if let socketPath { try? FileManager.default.removeItem(atPath: socketPath) }
+        RcAuthFile.remove(at: authFileURL)
         pidFile.clear()
         // Last on this path only: the marker's absence is what says the shutdown was
         // clean, so nothing that can be interrupted may remove it.

@@ -428,23 +428,12 @@ public actor ConnectionManager {
 
     // MARK: - Storage usage
 
-    /// The argument list for `rclone reveal`, with `--` before the value.
-    ///
-    /// An obscured value is base64-ish and begins with `-` about one time in seventy
-    /// (measured: 3 of 200), and rclone then parses it as a flag and fails. That
-    /// trap has bitten this project before, in the tests; without the terminator
-    /// one connection in seventy would have shown "could not reveal the stored
-    /// credential" in place of its usage.
-    static func revealArguments(for obscured: String) -> [String] {
-        ["reveal", "--", obscured]
-    }
-
     /// What the remote reports about its own usage — see `StorageUsage`.
     ///
     /// `.unreachable` when rclone could not be asked; `.notReported` when it could and
     /// the remote offers neither `about` nor a usage document. For the document the
-    /// stored credential is revealed with the daemon's own rclone, used for one request
-    /// and dropped — never logged, never placed in a URL.
+    /// stored credential is revealed in process, used for one request and dropped —
+    /// never logged, never placed in a URL or on a command line.
     public func storageUsage(for connection: Connection,
                              fetcher: StorageUsage.Fetcher = .init()) async -> StorageUsage.Outcome {
         let client: RcloneRCClient
@@ -469,15 +458,11 @@ public actor ConnectionManager {
         let user = config["user"] ?? ""
         var password = ""
         if let obscured = config["pass"], !obscured.isEmpty {
-            do {
-                let binary = await supervisor.rcloneBinary
-                let result = try await Shell.run(binary.path, Self.revealArguments(for: obscured), timeout: 10)
-                guard result.succeeded else {
-                    return .unreachable("rclone could not reveal the stored credential.")
-                }
-                password = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            } catch {
-                return .unreachable(error.localizedDescription)
+            // In process, never `rclone reveal` on a command line: every local
+            // account can read process arguments, and an obscured value is the
+            // password to anyone who has rclone (#156).
+            do { password = try RcloneObscure.reveal(obscured) } catch {
+                return .unreachable("Could not read the stored credential.")
             }
         }
         do {

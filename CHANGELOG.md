@@ -11,6 +11,17 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Security
+
+- No password appears in grrclone's process arguments any more. macOS lets every
+  account on a Mac read every other account's process arguments, and they also end
+  up in crash reports and diagnostic bundles. The built-in rclone's control-socket
+  password was passed that way for as long as the app ran; it now goes in a file
+  only your account can read, holding a hash, removed when rclone stops. The
+  storage-usage check briefly did the same with your WebDAV password, through
+  `rclone reveal`; grrclone now reads that value itself without starting a process.
+  ([#156](https://github.com/mlaify/grrclone/issues/156))
+
 ## [0.9.3] - 2026-09-23
 
 ### Fixed
