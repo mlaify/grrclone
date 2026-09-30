@@ -155,6 +155,30 @@ final class DaemonExitTests: XCTestCase {
         XCTAssertEqual(type, .typeRegular)
     }
 
+    /// A daemon that never opens its socket must not leave the credential file
+    /// behind. The socket wait times out after the supervisor has let go of the
+    /// process, so neither the exit handler nor the partial-start cleanup removes
+    /// it; Codex found that on review. An immediate exit does not test this — the
+    /// exit handler catches that one — so the stand-in stays alive past the wait.
+    /// Takes the ten-second startup timeout.
+    func testAStartThatNeverOpensItsSocketRemovesTheCredentialFile() async throws {
+        let fake = dir.appendingPathComponent("rclone-that-hangs")
+        try "#!/bin/sh\nexec sleep 30\n".write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        let supervisor = DaemonSupervisor(
+            binary: fake, settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("cache")),
+            runtimeDirectory: dir)
+        supervisors.append(supervisor)
+
+        do {
+            _ = try await supervisor.start()
+            XCTFail("a daemon without a socket cannot have started")
+        } catch {}
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(RcAuthFile.fileName).path),
+                       "a failed start left the credential file behind")
+    }
+
     func testTheLineIsAnHtpasswdSHA1Entry() {
         // SHA-1("abc") = a9993e36...; base64 of that digest is qZk+NkcGgWq6PiVxeFDCbJzQ2J0=
         XCTAssertEqual(RcAuthFile.line(user: "u", password: "abc"), "u:{SHA}qZk+NkcGgWq6PiVxeFDCbJzQ2J0=\n")
