@@ -1155,6 +1155,14 @@ final class AppModel: ObservableObject {
                     self.setState(.failed(error.localizedDescription), for: connection.id)
                     self.lastError = error.localizedDescription
                 }
+                // An unmount followed by a cleanup failure still took the volume
+                // away; the history should say so (Codex, on review).
+                let stillActive = await manager?.activeMounts.contains { $0.connection.id == connection.id } ?? true
+                if !stillActive {
+                    await healthLog.record(.user, volume: connection.displayName, mountPoint: point ?? "",
+                                           outcome: "disconnected, cleanup failed",
+                                           detail: error.localizedDescription)
+                }
             }
             await self.refresh()
         }
