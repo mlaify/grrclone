@@ -1101,7 +1101,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func connect(_ connection: Connection) {
+    /// - Parameter trigger: who asked, for the health log. A click is `.user`; the
+    ///   login-time connect says so instead (Codex, on review: it was logged as "you").
+    func connect(_ connection: Connection, trigger: HealthLog.Trigger = .user) {
         setState(.connecting, for: connection.id)
         Task.detached { [manager, healthLog] in
             do {
@@ -1117,7 +1119,7 @@ final class AppModel: ObservableObject {
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Connected \(connection.displayName)"
                 }
-                await healthLog.record(.user, volume: connection.displayName,
+                await healthLog.record(trigger, volume: connection.displayName,
                                        mountPoint: mount.mountPoint.path, outcome: "connected")
             } catch {
                 await MainActor.run {
@@ -1131,12 +1133,14 @@ final class AppModel: ObservableObject {
     }
 
     func disconnect(_ connection: Connection) {
-        setState(.connecting, for: connection.id)
+        // Read before the state changes: `.connecting` replaces the mounted URL, and
+        // reading after it left every disconnect's mount point empty (Codex).
         let point: String? = {
             guard let row = rows.first(where: { $0.id == connection.id }),
                   case .mounted(let url) = row.state else { return nil }
             return url.path
         }()
+        setState(.connecting, for: connection.id)
         Task.detached { [manager, healthLog] in
             do {
                 try await manager?.disconnect(connection.id)
@@ -1485,7 +1489,7 @@ final class AppModel: ObservableObject {
         for row in rows where row.connection.connectAtLogin && !row.state.isMounted {
             let folder = mountRoot.appendingPathComponent(row.connection.displayName).path
             if blockedMountPoints.contains(folder) { continue }
-            connect(row.connection)
+            connect(row.connection, trigger: .system("login"))
         }
     }
 
