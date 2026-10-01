@@ -128,6 +128,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var bandwidthLimit: String = ""
     /// Recent daemon output, refreshed while the Logs tab is open.
     @Published private(set) var logLines: [DaemonLog.Line] = []
+    /// Recent health decisions — rebuilt, slow, failed, your connects — from the
+    /// on-disk log (#154). Newest last.
+    @Published private(set) var healthEvents: [String] = []
+    /// Kept for the app's life and handed to the manager, so both write one file.
+    private let healthLog = HealthLog()
     @Published private(set) var logLevel: DaemonSettings.LogLevel = AppModel.loadLogLevel()
     private static let logLevelKey = "DaemonLogLevel"
     private static let bandwidthKey = "BandwidthLimit"
@@ -173,7 +178,7 @@ final class AppModel: ObservableObject {
 
         let supervisor = DaemonSupervisor(
             binary: binary, settings: DaemonSettings(logLevel: Self.loadLogLevel()))
-        let manager = ConnectionManager(supervisor: supervisor, registry: registry)
+        let manager = ConnectionManager(supervisor: supervisor, registry: registry, healthLog: healthLog)
         self.supervisor = supervisor
         self.manager = manager
 
@@ -460,6 +465,7 @@ final class AppModel: ObservableObject {
     func refreshLogs() async {
         guard let supervisor else { return }
         logLines = await supervisor.log.recent
+        healthEvents = await healthLog.recent(limit: 30)
     }
 
     /// Change verbosity on the running daemon.
@@ -1095,7 +1101,7 @@ final class AppModel: ObservableObject {
 
     func connect(_ connection: Connection) {
         setState(.connecting, for: connection.id)
-        Task.detached { [manager] in
+        Task.detached { [manager, healthLog] in
             do {
                 guard let manager else { return }
                 let root = await MainActor.run { self.mountRoot }
@@ -1109,6 +1115,8 @@ final class AppModel: ObservableObject {
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Connected \(connection.displayName)"
                 }
+                await healthLog.record(.user, volume: connection.displayName,
+                                       mountPoint: mount.mountPoint.path, outcome: "connected")
             } catch {
                 await MainActor.run {
                     self.setState(.failed(error.localizedDescription), for: connection.id)
@@ -1122,9 +1130,16 @@ final class AppModel: ObservableObject {
 
     func disconnect(_ connection: Connection) {
         setState(.connecting, for: connection.id)
-        Task.detached { [manager] in
+        let point: String? = {
+            guard let row = rows.first(where: { $0.id == connection.id }),
+                  case .mounted(let url) = row.state else { return nil }
+            return url.path
+        }()
+        Task.detached { [manager, healthLog] in
             do {
                 try await manager?.disconnect(connection.id)
+                await healthLog.record(.user, volume: connection.displayName,
+                                       mountPoint: point ?? "", outcome: "disconnected")
                 await MainActor.run {
                     self.setState(.disconnected, for: connection.id)
                     self.status = "Disconnected \(connection.displayName)"
@@ -1289,7 +1304,7 @@ final class AppModel: ObservableObject {
                 // Waking is not instantaneous; give the network a moment to settle
                 // before deciding a mount is broken.
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard let report = await manager?.checkHealth() else { return }
+                guard let report = await manager?.checkHealth(trigger: .system(reason)) else { return }
                 await MainActor.run {
                     if !report.repaired.isEmpty {
                         self.status = "Reconnected \(report.repaired.count) mount(s)"
@@ -1442,7 +1457,7 @@ final class AppModel: ObservableObject {
     func checkHealthNow() {
         status = "Checking mounts"
         Task.detached { [manager] in
-            guard let report = await manager?.checkHealth() else { return }
+            guard let report = await manager?.checkHealth(trigger: .menu) else { return }
             await MainActor.run {
                 if !report.failed.isEmpty {
                     self.status = "\(report.failed.count) mount(s) need attention"

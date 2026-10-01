@@ -50,14 +50,16 @@ final class HealthToleranceTests: XCTestCase {
     }
 
     private func makeManager(probe: ScriptedProbe, uploads: Int?,
-                         transport: RecordingTransport) async throws -> (ConnectionManager, Connection) {
+                         transport: RecordingTransport,
+                         healthLog: HealthLog? = nil) async throws -> (ConnectionManager, Connection) {
         let registry = MountRegistry(fileURL: dir.appendingPathComponent("mounts.json"))
         let supervisor = DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"),
                                           runtimeDirectory: dir)
         let manager = ConnectionManager(supervisor: supervisor, registry: registry,
                                         transports: [transport],
                                         probe: { probe.answer($0, $1) },
-                                        uploadsInFlight: { _ in uploads })
+                                        uploadsInFlight: { _ in uploads },
+                                        healthLog: healthLog)
         let connection = Connection(remote: "dav1", displayName: "Cloud")
         let point = dir.appendingPathComponent("Cloud")
         try await registry.record(MountRegistry.Entry(
@@ -263,5 +265,77 @@ final class HealthToleranceTests: XCTestCase {
     /// is the floor.
     func testPeriodicIntervalIsAtLeastFiveMinutes() {
         XCTAssertGreaterThanOrEqual(ConnectionManager.periodicHealthCheckInterval, 300)
+    }
+
+    // MARK: - The health log (#154)
+
+    private func log() -> HealthLog {
+        HealthLog(fileURL: dir.appendingPathComponent("logs/health.log"))
+    }
+
+    /// A healthy pass every five minutes would be the whole file. Not written.
+    func testAHealthyPassWritesNothing() async throws {
+        let healthLog = log()
+        let (manager, _) = try await makeManager(probe: ScriptedProbe([.healthy]), uploads: 0,
+                                                 transport: RecordingTransport(), healthLog: healthLog)
+        _ = await manager.checkHealth(trigger: .timer)
+        let lines = await healthLog.recent()
+        XCTAssertEqual(lines, [])
+    }
+
+    /// A rebuild says who asked for it and what each probe found.
+    func testARebuildRecordsItsTriggerAndProbes() async throws {
+        let healthLog = log()
+        let (manager, _) = try await makeManager(probe: ScriptedProbe([.unresponsive, .unresponsive]), uploads: 0,
+                                                 transport: RecordingTransport(), healthLog: healthLog)
+        _ = await manager.checkHealth(trigger: .timer)
+        let lines = await healthLog.recent()
+        XCTAssertEqual(lines.count, 1, "\(lines)")
+        let line = lines.first ?? ""
+        for expected in ["  timer  ", "  Cloud  ", "probe 5s: unresponsive", "probe 45s: unresponsive",
+                         "uploads in flight: 0"] {
+            XCTAssertTrue(line.contains(expected), "missing \(expected.debugDescription) in \(line)")
+        }
+        // With this transport the rebuild fails; the line says so and why.
+        XCTAssertTrue(line.contains("  failed  ") && line.contains("would not come down"), line)
+    }
+
+    /// Left alone for an upload: written, with the count that decided it.
+    func testLeftAloneForAnUploadIsRecorded() async throws {
+        let healthLog = log()
+        let (manager, _) = try await makeManager(probe: ScriptedProbe([.unresponsive]), uploads: 3,
+                                                 transport: RecordingTransport(), healthLog: healthLog)
+        _ = await manager.checkHealth(trigger: .system("wake"))
+        let line = await healthLog.recent().first ?? ""
+        XCTAssertTrue(line.contains("  wake  ") && line.contains("slow, left alone")
+                      && line.contains("uploads in flight: 3"), line)
+    }
+
+    /// Two files at most: the log cannot grow without bound, and `recent` reads
+    /// across the rotation.
+    func testTheLogRotatesAndReadsAcrossTheRotation() async throws {
+        let url = dir.appendingPathComponent("logs/health.log")
+        let healthLog = HealthLog(fileURL: url, maxBytes: 400)
+        for i in 0..<40 {
+            await healthLog.record(.timer, volume: "V\(i)", mountPoint: "/m", outcome: "rebuilt")
+        }
+        let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        XCTAssertLessThan(size, 400 + 200, "the live file must stay near its limit")
+        let rotated = url.deletingLastPathComponent().appendingPathComponent("health.1.log")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rotated.path))
+        let recent = await healthLog.recent(limit: 3)
+        XCTAssertEqual(recent.count, 3)
+        XCTAssertTrue(recent.last?.contains("V39") == true, "newest last: \(recent)")
+        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600)
+    }
+
+    /// One event, one line, whatever a volume is called.
+    func testANewlineInANameCannotForgeALine() async throws {
+        let healthLog = log()
+        await healthLog.record(.user, volume: "Evil\n2026-01-01T00:00:00Z  timer  Fake  rebuilt",
+                               mountPoint: "/m", outcome: "connected")
+        let lines = await healthLog.recent()
+        XCTAssertEqual(lines.count, 1, "\(lines)")
     }
 }

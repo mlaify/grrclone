@@ -24,6 +24,8 @@ public actor ConnectionManager {
     private let fingerprints: NFSFingerprint.Reader
     private let probe: HealthProbe
     private let uploadsInFlight: UploadsInFlight
+    /// Where health decisions are written (#154). Nil in tests that do not ask.
+    public let healthLog: HealthLog?
     private var active: [UUID: ActiveMount] = [:]
 
     /// How a mount is probed for liveness. `MountHealth.probe` outside tests.
@@ -64,7 +66,9 @@ public actor ConnectionManager {
                 mountTable: @escaping SystemMounts.Reader = { try await SystemMounts.current() },
                 fingerprints: @escaping NFSFingerprint.Reader = { try await NFSFingerprint.current() },
                 probe: @escaping HealthProbe = { await MountHealth.probe($0, timeout: $1) },
-                uploadsInFlight: UploadsInFlight? = nil) {
+                uploadsInFlight: UploadsInFlight? = nil,
+                healthLog: HealthLog? = nil) {
+        self.healthLog = healthLog
         self.supervisor = supervisor
         self.registry = registry
         self.cacheRoot = cacheRoot ?? Self.defaultCacheRoot()
@@ -963,7 +967,7 @@ public actor ConnectionManager {
             // second, longer probe could learn, and waiting through one per mount
             // would leave the volumes dead for most of a minute each. Codex caught
             // this on review of #146.
-            let report = await self.checkHealth(confirm: false)
+            let report = await self.checkHealth(confirm: false, trigger: .daemonExit)
             await onRepaired(report)
         }
     }
@@ -991,7 +995,7 @@ public actor ConnectionManager {
                 guard !Task.isCancelled, let self else { return }
                 guard await !self.activeMounts.isEmpty else { continue }
                 let owedAnAllClear = await self.lastHealthReportWasNoisy
-                let report = await self.checkHealth()
+                let report = await self.checkHealth(trigger: .timer)
                 // A skipped pass is neither noisy nor quiet; it changes nothing.
                 guard !report.skipped else { continue }
                 if report.isNoisy || owedAnAllClear { await onRepaired(report) }
@@ -1046,7 +1050,8 @@ public actor ConnectionManager {
     ///     one before a rebuild. Off only when the caller already knows the server
     ///     is gone — the daemon-exit handler — where waiting would be pure delay.
     @discardableResult
-    public func checkHealth(repair: Bool = true, confirm: Bool = true) async -> HealthReport {
+    public func checkHealth(repair: Bool = true, confirm: Bool = true,
+                            trigger: HealthLog.Trigger = .unspecified) async -> HealthReport {
         var report = HealthReport()
         // Single flight. Actor reentrancy lets a second call interleave at every
         // await below; two passes tearing down and rebuilding the same mounts is
@@ -1058,9 +1063,40 @@ public actor ConnectionManager {
             lastHealthReportWasNoisy = report.isNoisy
         }
 
+        // Written after the pass, in order, and awaited — not from a `defer`d Task,
+        // which would race the next pass and a test reading the file.
+        var decisions: [(volume: String, mountPoint: String, outcome: String, detail: String)] = []
+
         for mount in active.values {
             let id = mount.connection.id
-            switch await probe(mount.mountPoint, Self.probeDeadline) {
+            // What was learned about this mount, in order, for the health log.
+            var steps: [String] = []
+            func timedProbe(_ deadline: TimeInterval) async -> MountHealth.Status {
+                let started = Date()
+                let status = await probe(mount.mountPoint, deadline)
+                steps.append(String(format: "probe %.0fs: %@ in %.1fs", deadline,
+                                    String(describing: status), Date().timeIntervalSince(started)))
+                return status
+            }
+            func countUploads() async -> Int? {
+                let n = await uploadsInFlight(mount)
+                steps.append("uploads in flight: \(n.map(String.init) ?? "unknown")")
+                return n
+            }
+            defer {
+                // Healthy passes are not written: every five minutes, they would be
+                // the whole file. Everything else is a decision someone may ask about.
+                if !report.healthy.contains(id), let log = healthLog {
+                    let outcome = report.repaired.contains(id) ? "rebuilt"
+                        : report.slow[id] != nil ? "slow, left alone"
+                        : report.failed[id] != nil ? "failed" : "checked"
+                    let why = report.failed[id] ?? report.slow[id] ?? ""
+                    let detail = (steps + (why.isEmpty ? [] : [why])).joined(separator: "; ")
+                    _ = log
+                    decisions.append((mount.connection.displayName, mount.mountPoint.path, outcome, detail))
+                }
+            }
+            switch await timedProbe(Self.probeDeadline) {
             case .healthy:
                 report.healthy.append(id)
 
@@ -1080,7 +1116,7 @@ public actor ConnectionManager {
                 // and rebuilding on it cancelled the very uploads the mount existed
                 // to carry (#146). So: is the VFS visibly working? Then it is alive,
                 // whatever the kernel path says right now, and it is left alone.
-                if let uploads = await uploadsInFlight(mount), uploads > 0 {
+                if let uploads = await countUploads(), uploads > 0 {
                     report.slow[id] = "slow to answer; \(uploads) upload(s) in flight, left alone"
                     continue
                 }
@@ -1090,19 +1126,25 @@ public actor ConnectionManager {
                 }
                 // Ask again, and give it real time. Only silence twice — the second
                 // time for the better part of a minute — earns a rebuild.
-                switch await probe(mount.mountPoint, Self.confirmationDeadline) {
+                switch await timedProbe(Self.confirmationDeadline) {
                 case .healthy:
                     report.slow[id] = "answered, but took longer than \(Int(Self.probeDeadline)) seconds"
                 case .unknown:
                     report.failed[id] = "could not read the mount table"
                 case .gone, .unresponsive:
                     // The upload check is repeated: the first answer is up to 45 s old.
-                    if let uploads = await uploadsInFlight(mount), uploads > 0 {
+                    if let uploads = await countUploads(), uploads > 0 {
                         report.slow[id] = "not answering; \(uploads) upload(s) still in flight, left alone"
                         continue
                     }
                     await repairIfAllowed(mount, repair: repair, into: &report)
                 }
+            }
+        }
+        if let healthLog {
+            for d in decisions {
+                await healthLog.record(trigger, volume: d.volume, mountPoint: d.mountPoint,
+                                       outcome: d.outcome, detail: d.detail)
             }
         }
         return report

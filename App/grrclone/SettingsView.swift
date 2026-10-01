@@ -581,6 +581,34 @@ private struct LogsTab: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
 
+            // Why volumes were rebuilt or left alone (#154). Kept on disk, unlike the
+            // rclone output above, so it survives quitting the app.
+            DisclosureGroup("Health decisions (\(model.healthEvents.count))") {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(model.healthEvents.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if model.healthEvents.isEmpty {
+                            Text("No rebuilds, slow answers or failures recorded.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 140)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([HealthLog.defaultURL()])
+                }
+                .font(.caption)
+            }
+            .font(.caption)
+
             Text("Passwords are removed automatically. Debug is very noisy — "
                  + "don't leave it on.")
             .font(.caption).foregroundStyle(.secondary)
