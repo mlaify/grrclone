@@ -104,13 +104,27 @@ Health decisions records each slow answer, what the probes measured, and whether
 rebuild followed. If the storage's own access log shows requests answered quickly while
 the alert fires, the delay is on the way there. In the case that prompted this note it
 was DNS: the VPN's first DNS server dropped about one query in three, and each lookup
-cost a second or more. This checks a resolver directly:
+cost a second or more.
+
+To check yours, first list the DNS servers the Mac is actually using. A VPN usually
+replaces them:
 
 ```bash
-for i in $(seq 1 20); do dig @45.90.28.116 example.com +tries=1 +time=1 +noall +stats | grep -c "Query time"; done | sort | uniq -c
+scutil --dns | grep nameserver | sort -u
 ```
 
-Every line should read 1. Any 0 is a lost query.
+Then test each address it lists, the first one especially, since it is asked first.
+Put your storage's host name in place of `your.storage.host`:
+
+```bash
+for ns in $(scutil --dns | awk '/nameserver/ {print $3}' | sort -u); do
+  lost=0; for i in $(seq 1 20); do dig @$ns your.storage.host +tries=1 +time=1 +noall +stats | grep -q "Query time" || lost=$((lost+1)); done
+  echo "$ns lost $lost of 20"
+done
+```
+
+Any loss above zero is worth fixing, usually by reordering or replacing that server in
+the VPN or network settings.
 
 See [#155](https://github.com/mlaify/grrclone/issues/155) and
 [#146](https://github.com/mlaify/grrclone/issues/146).
