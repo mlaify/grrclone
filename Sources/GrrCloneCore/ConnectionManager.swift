@@ -57,6 +57,12 @@ public actor ConnectionManager {
     /// refuses it. Codex found the gap between the last check and the delete.
     private var deleting: Set<String> = []
 
+    /// Connections whose mount is being taken down — by a disconnect or by a repair's
+    /// teardown. The entry stays in `active` until the server is stopped, which is
+    /// after the unmount, so `active` alone says "mounted" for a volume that is
+    /// already gone. Storage usage refuses these (Codex, on review of #147).
+    private var tearingDown: Set<UUID> = []
+
     /// - Parameter mountTable: how to read what is mounted. Injected so a test can
     ///   make the read fail and prove the manager fails closed when it does.
     public init(supervisor: DaemonSupervisor,
@@ -239,6 +245,8 @@ public actor ConnectionManager {
     public func disconnect(_ connectionID: UUID) async throws {
         guard let mount = active[connectionID] else { return }
         guard let transport = transports[mount.connection.transport] else { return }
+        tearingDown.insert(connectionID)
+        defer { tearingDown.remove(connectionID) }
 
         // The unmount is the step that can fail meaningfully. If it throws we keep the
         // connection active and the registry entry intact, because the mount is still
@@ -438,17 +446,42 @@ public actor ConnectionManager {
     /// the remote offers neither `about` nor a usage document. For the document the
     /// stored credential is revealed in process, used for one request and dropped —
     /// never logged, never placed in a URL or on a command line.
+    /// - Parameter proceed: asked at the same points as the mount recheck. The caller's
+    ///   own reasons to stop — the request superseded, the remote edited — so a
+    ///   request that is no longer wanted contacts nothing more.
     public func storageUsage(for connection: Connection,
-                             fetcher: StorageUsage.Fetcher = .init()) async -> StorageUsage.Outcome {
+                             fetcher: StorageUsage.Fetcher = .init(),
+                             proceed: @escaping @Sendable () async -> Bool = { true }) async -> StorageUsage.Outcome {
+        // Only what is mounted. A mounted remote is one rclone already talks to on
+        // the user's say-so; anything else would be grrclone reaching out by itself,
+        // to a provider the user configured but did not connect (#147). Checked
+        // before the daemon is touched, so it holds even when rclone is down.
+        guard let mount = active[connection.id], !tearingDown.contains(connection.id) else { return .notConnected }
+        // And still mounted — the same mount, not a later one — at every step. Each
+        // await below releases the actor, and a Disconnect can land in any of them;
+        // the gate at the top alone would then let this go on to contact a provider
+        // the user just disconnected, and hand back figures for a volume that is no
+        // longer there. Codex found that on review.
+        func stillMounted() async -> Bool {
+            // The caller's gate first, then this actor's state, with no await between
+            // the state check and whatever the caller does next. Checked the other way
+            // round, the await on `proceed` let a disconnect begin after the state had
+            // been read (Codex, on review).
+            guard await proceed() else { return false }
+            return active[connection.id]?.serverID == mount.serverID && !tearingDown.contains(connection.id)
+        }
+
         let client: RcloneRCClient
         do { client = try await supervisor.requireClient() } catch {
             return .unreachable(error.localizedDescription)
         }
+        guard await stillMounted() else { return .notConnected }
 
         // 1. Whatever the backend itself can say. An error here is the normal answer for
         //    a backend without `about`, so it is not reported as a failure.
-        if let about = try? await client.about(fs: "\(connection.remote):"),
-           let usage = StorageUsage.fromAbout(about) {
+        let about = try? await client.about(fs: "\(connection.remote):")
+        guard await stillMounted() else { return .notConnected }
+        if let about, let usage = StorageUsage.fromAbout(about) {
             return .reported(usage)
         }
 
@@ -469,9 +502,11 @@ public actor ConnectionManager {
                 return .unreachable("Could not read the stored credential.")
             }
         }
+        guard await stillMounted() else { return .notConnected }
         do {
-            guard let usage = try await fetcher.usageDocument(baseURL: url, user: user, password: password)
-            else { return .notReported }
+            let fetched = try await fetcher.usageDocument(baseURL: url, user: user, password: password)
+            guard await stillMounted() else { return .notConnected }
+            guard let usage = fetched else { return .notReported }
             return .reported(usage)
         } catch StorageUsage.Failure.insecureURL {
             return .notReported
@@ -1188,13 +1223,18 @@ public actor ConnectionManager {
         // next launch, listed in the menu as "Not managed by grrclone", and outside
         // the one rule that authorises an unmount at all. `disconnect()` got this
         // right and the two disagreed (#111).
-        try await transport.unmount(at: mount.mountPoint)
+        tearingDown.insert(mount.connection.id)
+        do { try await transport.unmount(at: mount.mountPoint) } catch {
+            tearingDown.remove(mount.connection.id)
+            throw error
+        }
 
         if let client = try? await supervisor.requireClient() {
             try? await client.stopServer(id: mount.serverID)
         }
         try? await registry.forget(mountPoint: mount.mountPoint.path)
         active[mount.connection.id] = nil
+        tearingDown.remove(mount.connection.id)
         await recordLiveMounts()
         Self.removeIfEmpty(mount.mountPoint.path)
 
@@ -1239,6 +1279,12 @@ public actor ConnectionManager {
     /// that refuses to unmount, with nothing real behind it.
     func adoptActiveMountForTesting(_ mount: ActiveMount) {
         active[mount.connection.id] = mount
+    }
+
+    /// Test seam: drop a mount from `active` as `disconnect()` would, without the
+    /// unmount.
+    func forgetActiveMountForTesting(_ id: UUID) {
+        active[id] = nil
     }
 
     /// Paths in the mount table that look like ours but are not recorded as owned.

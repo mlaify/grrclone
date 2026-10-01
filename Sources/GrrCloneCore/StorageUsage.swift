@@ -71,6 +71,17 @@ public struct StorageUsage: Sendable, Equatable {
         case notReported
         /// rclone (or the server) could not be asked. Shown as such, never as zero.
         case unreachable(String)
+        /// Not asked, because the connection is not mounted. grrclone contacts the
+        /// storage a user connects, and only that (#147): asking `about` of a
+        /// configured-but-unmounted remote makes rclone log in to the provider on the
+        /// app's own initiative — a Proton Drive login attempt showed up in a log for
+        /// a remote that had never been connected from this Mac.
+        case notConnected
+        /// Not asked, because the saved settings have changed and the volume is
+        /// still serving the old ones until it is remounted. The named remote now
+        /// points at the new endpoint or credentials, so asking would contact
+        /// storage that has not been connected (Codex, on review of #147).
+        case awaitingRemount
     }
 
     public enum Failure: Error, LocalizedError, Equatable {
