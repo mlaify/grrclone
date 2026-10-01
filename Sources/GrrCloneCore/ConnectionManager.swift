@@ -1089,13 +1089,12 @@ public actor ConnectionManager {
             defer {
                 // Healthy passes are not written: every five minutes, they would be
                 // the whole file. Everything else is a decision someone may ask about.
-                if !report.healthy.contains(id), let log = healthLog {
+                if !report.healthy.contains(id), healthLog != nil {
                     let outcome = report.repaired.contains(id) ? "rebuilt"
                         : report.slow[id] != nil ? "slow, left alone"
                         : report.failed[id] != nil ? "failed" : "checked"
                     let why = report.failed[id] ?? report.slow[id] ?? ""
                     let detail = (steps + (why.isEmpty ? [] : [why])).joined(separator: "; ")
-                    _ = log
                     decisions.append((mount.connection.displayName, mount.mountPoint.path, outcome, detail, Date()))
                 }
             }
