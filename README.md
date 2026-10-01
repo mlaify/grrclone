@@ -171,8 +171,8 @@ Method and full numbers in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## What it cannot do
 
-Three limits worth knowing before you rely on it, each a consequence of NFSv3 rather
-than something grrclone chose. [docs/limitations.md](docs/limitations.md) has the
+Four limits worth knowing before you rely on it, each a consequence of NFSv3 or of
+macOS's NFS client rather than something grrclone chose. [docs/limitations.md](docs/limitations.md) has the
 detail and the measurements.
 
 **File locks are not shared between Macs.** rclone's NFS server runs no lock daemon,
@@ -187,6 +187,12 @@ that does not exist here, and filters do not help. The related `.DS_Store` probl
 **A dead backend gives an error, not a hang** — after about two minutes. That is the
 deliberate trade: the alternative wedges Finder until you reboot. Writes usually
 survive it, because they land in a local cache first.
+
+**"Server connections interrupted" appears after five seconds.** macOS raises that
+alert, naming the volume, as soon as any one request has waited five seconds, so a
+slow listing or a slow DNS lookup on the way to your storage is enough. **Ignore** is
+safe, and the volume carries on when the storage answers. **Disconnect All** unmounts it,
+and grrclone reconnects it at its next check. No mount option silences it.
 
 ## Privacy
 

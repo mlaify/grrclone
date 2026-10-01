@@ -77,6 +77,44 @@ with no reboot. See [benchmarks.md](benchmarks.md).
 
 See [#42](https://github.com/mlaify/grrclone/issues/42).
 
+## "Server connections interrupted" after five seconds of silence
+
+macOS shows an alert titled "Server connections interrupted". It names the volume and
+offers **Ignore** and **Disconnect All**.
+
+It appears far sooner than the two-minute error above. The NFS client marks a server
+unresponsive once a request has gone **5 seconds** without a reply
+(`sysctl vfs.generic.nfs.client.initialdowndelay`, measured on macOS 27). It shows the
+alert from then on until the server answers again. rclone's NFS server replies only when
+the storage behind it does, so one slow request to the backend is enough: a big
+directory listing, a slow disk, or a slow DNS lookup on the way there.
+
+**Ignore is safe.** Nothing is lost. The volume carries on as soon as the backend
+answers, and writes are already in the local cache.
+
+**Disconnect All** force-unmounts the volume. Anything open on it fails. grrclone
+notices it is gone and reconnects it at its next check, which happens within five
+minutes, on wake, or when you choose Check mounts.
+
+There is no mount option to stop it for a server that is slow but alive. `mutejukebox`
+silences a different case, an explicit "try again later" reply that rclone never sends.
+
+**Finding the cause.** The menu marks a volume that is answering slowly. Settings, Logs,
+Health decisions records each slow answer, what the probes measured, and whether a
+rebuild followed. If the storage's own access log shows requests answered quickly while
+the alert fires, the delay is on the way there. In the case that prompted this note it
+was DNS: the VPN's first DNS server dropped about one query in three, and each lookup
+cost a second or more. This checks a resolver directly:
+
+```bash
+for i in $(seq 1 20); do dig @45.90.28.116 example.com +tries=1 +time=1 +noall +stats | grep -c "Query time"; done | sort | uniq -c
+```
+
+Every line should read 1. Any 0 is a lost query.
+
+See [#155](https://github.com/mlaify/grrclone/issues/155) and
+[#146](https://github.com/mlaify/grrclone/issues/146).
+
 ## A stacked, dead mount is hard to remove — and `umount -f` lies about it
 
 macOS lets a mount be placed on top of an existing mount at the same path. A retrying

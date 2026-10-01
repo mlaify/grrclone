@@ -23,6 +23,13 @@ thing was built the way it was, and what was tried and rejected — lives in
   are not written.
   ([#154](https://github.com/mlaify/grrclone/issues/154))
 
+### Documentation
+
+- The README and docs/limitations.md now explain macOS's "Server connections
+  interrupted" alert: it appears after five seconds of silence, Ignore is safe,
+  what Disconnect All does, and how to find the cause.
+  ([#155](https://github.com/mlaify/grrclone/issues/155))
+
 ### Fixed
 
 - When checking whether rclone from a previous run is still alive, grrclone no longer
