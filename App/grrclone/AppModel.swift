@@ -739,12 +739,52 @@ final class AppModel: ObservableObject {
     /// A mounted connection keeps serving from the settings it started with — rclone
     /// read them at `serve/start` — so the user is told to reconnect rather than left
     /// to wonder why a corrected endpoint made no difference.
+    /// Every connection of `remote` that the manager still serves owes a remount.
+    /// From the manager's state, not the rows': a row shows `.connecting` during a
+    /// disconnect too, and a disconnect that then fails leaves the old mount live
+    /// (Codex, on review).
+    private func markLiveMountsForRemount(of remote: String) async {
+        guard let manager else { return }
+        for mount in await manager.activeMounts where mount.connection.remote == remote {
+            needsRemount.insert(mount.connection.id)
+            invalidateStorageUsage(mount.connection.id, with: .awaitingRemount)
+        }
+    }
+
     func updateRemote(named name: String, parameters: [String: String]) async throws {
         guard let supervisor else { throw DaemonSupervisor.Failure.notRunning }
-        try await supervisor.requireClient().updateRemote(name: name, parameters: parameters)
 
-        let affected = rows.filter { $0.connection.remote == name && $0.state.isMounted }
-        for row in affected { needsRemount.insert(row.id) }
+        // Before the update is sent, not after it returns: rclone applies the new
+        // settings before its reply reaches us, and a usage request out at that
+        // moment would otherwise still hold a valid generation and could read them
+        // (Codex, on review). Any figure shown is for the old settings anyway.
+        // Mounted rows, and rows still connecting: rclone may already have read the
+        // old settings for a mount that has not finished, which would then serve
+        // them while the config names the new ones (Codex, on review).
+        let affected = rows.filter {
+            guard $0.connection.remote == name else { return false }
+            if $0.state.isMounted { return true }
+            if case .connecting = $0.state { return true }
+            return false
+        }
+        for row in affected { invalidateStorageUsage(row.id, with: .awaitingRemount) }
+        remoteEditCount[name, default: 0] += 1
+        remoteEditsInFlight[name, default: 0] += 1
+        defer {
+            remoteEditsInFlight[name, default: 1] -= 1
+            remoteEditCount[name, default: 0] += 1
+        }
+        do {
+            try await supervisor.requireClient().updateRemote(name: name, parameters: parameters)
+        } catch {
+            // Not proof that nothing changed: the request can be applied and its reply
+            // lost. So the gate stays closed and the volume is marked for remount, the
+            // safe reading of an ambiguous answer (Codex, on review).
+            await markLiveMountsForRemount(of: name)
+            throw error
+        }
+
+        await markLiveMountsForRemount(of: name)
         await refresh()
         status = affected.isEmpty
             ? "Updated \(name)"
@@ -781,22 +821,66 @@ final class AppModel: ObservableObject {
     /// Not polled — a quota does not change every two seconds, and every request is a
     /// request to the user's storage provider.
     private var storageUsageAskedAt: [UUID: Date] = [:]
+    /// Bumped whenever a connection's usage is invalidated or asked afresh. Only the
+    /// newest request may publish, and an older one is told to stop contacting
+    /// anything at its next step (Codex, on review: an edit or a reconnect landing
+    /// while a request was out let the stale request publish or reach the new
+    /// endpoint).
+    private var usageGeneration: [UUID: Int] = [:]
+
+    private func invalidateStorageUsage(_ id: UUID, with outcome: StorageUsage.Outcome) {
+        usageGeneration[id, default: 0] += 1
+        storageUsage[id] = outcome
+        askingStorageUsage.remove(id)
+    }
 
     /// Opening the menu asks again only after five minutes: a quota does not move
     /// faster than that, and every ask is one call to the daemon and possibly one
     /// request to the user's storage provider. `force` is the Refresh button.
     func refreshStorageUsage(for connection: Connection, force: Bool = false) async {
         guard let manager else { return }
-        if !force, let asked = storageUsageAskedAt[connection.id],
-           Date().timeIntervalSince(asked) < 300, storageUsage[connection.id] != nil {
+        // Edited but not remounted: the live mount serves the old settings while the
+        // remote's configuration already names the new ones. Asking now would reach
+        // whatever the edit points at, which nobody has connected to yet.
+        if needsRemount.contains(connection.id) {
+            invalidateStorageUsage(connection.id, with: .awaitingRemount)
             return
         }
-        guard !askingStorageUsage.contains(connection.id) else { return }
-        askingStorageUsage.insert(connection.id)
-        defer { askingStorageUsage.remove(connection.id) }
-        let outcome = await manager.storageUsage(for: connection)
-        storageUsage[connection.id] = outcome
-        storageUsageAskedAt[connection.id] = Date()
+        // The throttle never holds back a connection that was not connected last
+        // time: it may be now, and "Connect to see usage" must not outlive the
+        // connect by five minutes.
+        if !force, let asked = storageUsageAskedAt[connection.id],
+           Date().timeIntervalSince(asked) < 300,
+           let last = storageUsage[connection.id], last != .notConnected, last != .awaitingRemount {
+            return
+        }
+        // An ordinary ask waits for the one already out. A forced one — Refresh,
+        // or the ask right after a connect or remount — supersedes it: the old one
+        // may be about a mount that has since been replaced.
+        if !force, askingStorageUsage.contains(connection.id) { return }
+        let id = connection.id
+        let generation = usageGeneration[id, default: 0] + 1
+        usageGeneration[id] = generation
+        askingStorageUsage.insert(id)
+        defer { if usageGeneration[id] == generation { askingStorageUsage.remove(id) } }
+
+        let outcome = await manager.storageUsage(for: connection, proceed: { [weak self] in
+            await MainActor.run {
+                guard let self else { return false }
+                return self.usageGeneration[id] == generation && !self.needsRemount.contains(id)
+            }
+        })
+        // Superseded or invalidated while out: whatever it found is not the answer.
+        guard usageGeneration[id] == generation else { return }
+        // A Disconnect can finish while this was out. Figures that arrive after it
+        // must not put the bar back.
+        let stillMounted: Bool = {
+            guard let row = rows.first(where: { $0.id == id }) else { return false }
+            if case .mounted = row.state { return true }
+            return false
+        }()
+        storageUsage[id] = stillMounted ? outcome : .notConnected
+        storageUsageAskedAt[id] = Date()
     }
 
     func clearCache(for connection: Connection) async {
@@ -1120,6 +1204,7 @@ final class AppModel: ObservableObject {
     ///   login-time connect says so instead (Codex, on review: it was logged as "you").
     func connect(_ connection: Connection, trigger: HealthLog.Trigger = .user) {
         setState(.connecting, for: connection.id)
+        let stamp = editStamp(for: connection.remote)
         Task.detached { [manager, healthLog] in
             do {
                 guard let manager else { return }
@@ -1130,17 +1215,28 @@ final class AppModel: ObservableObject {
                     // pending is now in force. Clearing this only in `remount()` left
                     // Settings insisting the changes had not taken after an ordinary
                     // disconnect-and-reconnect from the menu.
-                    self.needsRemount.remove(connection.id)
+                    // Unless the remote was edited while this connect was in flight:
+                    // then this mount may be serving the old settings.
+                    if self.editedSince(stamp, remote: connection.remote) {
+                        self.needsRemount.insert(connection.id)
+                    } else {
+                        self.needsRemount.remove(connection.id)
+                    }
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Connected \(connection.displayName)"
                 }
                 await healthLog.record(trigger, volume: connection.displayName,
                                        mountPoint: mount.mountPoint.path, outcome: "connected")
+                // Now there is something to ask (#147) — unless a remount is owed,
+                // which refreshStorageUsage itself refuses.
+                await self.refreshStorageUsage(for: connection, force: true)
             } catch {
                 await MainActor.run {
                     self.setState(.failed(error.localizedDescription), for: connection.id)
                     self.lastError = error.localizedDescription
                     self.status = "Failed to connect \(connection.displayName)"
+                    // Nothing is mounted, so nothing is awaiting a remount either.
+                    self.invalidateStorageUsage(connection.id, with: .notConnected)
                 }
             }
             await self.refresh()
@@ -1164,6 +1260,8 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     self.setState(.disconnected, for: connection.id)
                     self.status = "Disconnected \(connection.displayName)"
+                    // Last known figures are not shown for a volume that is not there.
+                    self.invalidateStorageUsage(connection.id, with: .notConnected)
                 }
             } catch {
                 await MainActor.run {
@@ -1171,9 +1269,10 @@ final class AppModel: ObservableObject {
                     self.lastError = error.localizedDescription
                 }
                 // An unmount followed by a cleanup failure still took the volume
-                // away; the history should say so (Codex, on review).
+                // away: its figures go, and the history says so.
                 let stillActive = await manager?.activeMounts.contains { $0.connection.id == connection.id } ?? true
                 if !stillActive {
+                    await MainActor.run { self.invalidateStorageUsage(connection.id, with: .notConnected) }
                     await healthLog.record(.user, volume: connection.displayName, mountPoint: point ?? "",
                                            outcome: "disconnected, cleanup failed",
                                            detail: error.localizedDescription)
@@ -1197,6 +1296,24 @@ final class AppModel: ObservableObject {
     /// read-only case is the one that matters: the user believes a safety setting is
     /// active on a volume that is still accepting writes.
     @Published private(set) var needsRemount: Set<UUID> = []
+    /// Per remote: bumped when an edit starts and again when it ends, and the number
+    /// of edits in flight. A connect notes both when it starts; if the count moved
+    /// by the time it finishes, or an edit was already under way, rclone may have
+    /// served it the old settings, so it owes a remount (Codex, on review: a
+    /// one-time snapshot of connecting rows missed connects that began during the
+    /// edit, and caught disconnects that were not connects at all).
+    private var remoteEditCount: [String: Int] = [:]
+    private var remoteEditsInFlight: [String: Int] = [:]
+
+    /// What a connect records at its start, to compare at its end.
+    private struct EditStamp { let count: Int; let editing: Bool }
+    private func editStamp(for remote: String) -> EditStamp {
+        EditStamp(count: remoteEditCount[remote, default: 0], editing: remoteEditsInFlight[remote, default: 0] > 0)
+    }
+    /// Whether settings may have changed under a connect that started at `stamp`.
+    private func editedSince(_ stamp: EditStamp, remote: String) -> Bool {
+        stamp.editing || remoteEditCount[remote, default: 0] != stamp.count
+    }
 
     /// Whether two versions of a connection differ in anything consumed at mount time.
     ///
@@ -1237,6 +1354,7 @@ final class AppModel: ObservableObject {
     /// volume, and doing that without being asked is its own surprise.
     func remount(_ connection: Connection) {
         setState(.connecting, for: connection.id)
+        let stamp = editStamp(for: connection.remote)
         Task.detached { [manager] in
             guard let manager else { return }
 
@@ -1283,6 +1401,9 @@ final class AppModel: ObservableObject {
             do {
                 try await manager.disconnect(connection.id)
                 tornDown = true
+                // The old mount is gone, and with it what its figures described —
+                // whether or not the connect below succeeds.
+                await MainActor.run { self.invalidateStorageUsage(connection.id, with: .notConnected) }
                 let root = await MainActor.run { self.mountRoot }
                 let mount = try await manager.connect(connection, mountRoot: root)
                 await MainActor.run {
@@ -1290,14 +1411,20 @@ final class AppModel: ObservableObject {
                     // `connect(_:)`, so it clears the flag itself. Both places set it
                     // on the same condition: a mount was just built from the saved
                     // connection, so the saved connection is now what is in force.
-                    self.needsRemount.remove(connection.id)
+                    if self.editedSince(stamp, remote: connection.remote) {
+                        self.needsRemount.insert(connection.id)
+                    } else {
+                        self.needsRemount.remove(connection.id)
+                    }
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Remounted \(connection.displayName)"
                 }
                 // The Remount button bypasses connect(_:) and disconnect(_:), so it
-                // records itself (Codex, on review).
+                // records itself.
                 await self.healthLog.record(.user, volume: connection.displayName,
                                             mountPoint: mount.mountPoint.path, outcome: "remounted")
+                // The new settings are live now; ask them.
+                await self.refreshStorageUsage(for: connection, force: true)
             } catch {
                 await MainActor.run {
                     self.setState(.failed(error.localizedDescription), for: connection.id)
@@ -1306,6 +1433,9 @@ final class AppModel: ObservableObject {
                 // Teardown is judged by the manager's state, not by whether
                 // disconnect returned: it can unmount and then throw in cleanup.
                 let stillActive = await manager.activeMounts.contains { $0.connection.id == connection.id }
+                if !stillActive {
+                    await MainActor.run { self.invalidateStorageUsage(connection.id, with: .notConnected) }
+                }
                 if tornDown || !stillActive {
                     await self.healthLog.record(.user, volume: connection.displayName, mountPoint: oldPoint,
                                                 outcome: "remount failed after unmounting",

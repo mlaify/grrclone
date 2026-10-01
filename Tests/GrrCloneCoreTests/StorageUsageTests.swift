@@ -154,4 +154,168 @@ final class StorageUsageTests: XCTestCase {
 private actor Recorder {
     var last: URLRequest?
     func record(_ request: URLRequest) { last = request }
+
+}
+
+/// Only connected storage is asked about its usage (#147).
+final class StorageUsageGateTests: XCTestCase {
+
+    /// A configured remote that is not mounted is not asked anything — not `about`,
+    /// not the usage document. The supervisor here has no daemon, so if the gate
+    /// were missing the outcome would be `.unreachable`, not `.notConnected`.
+    func testAnUnmountedConnectionIsNotAsked() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("grr147-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let manager = ConnectionManager(
+            supervisor: DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"), runtimeDirectory: dir),
+            registry: MountRegistry(fileURL: dir.appendingPathComponent("mounts.json")))
+        let fetched = Recorder()
+        let fetcher = StorageUsage.Fetcher { request in
+            await fetched.record(request)
+            throw URLError(.cancelled)
+        }
+
+        let outcome = await manager.storageUsage(for: Connection(remote: "proton", displayName: "Proton"),
+                                                 fetcher: fetcher)
+
+        XCTAssertEqual(outcome, .notConnected)
+        let request = await fetched.last
+        XCTAssertNil(request, "nothing may be fetched for an unmounted connection")
+    }
+
+    /// The same connection, once mounted, gets past the gate (and here, with no
+    /// daemon, fails honestly as unreachable rather than claiming not-connected).
+    func testAMountedConnectionIsAsked() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("grr147-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let manager = ConnectionManager(
+            supervisor: DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"), runtimeDirectory: dir),
+            registry: MountRegistry(fileURL: dir.appendingPathComponent("mounts.json")))
+        let connection = Connection(remote: "dav1", displayName: "Cloud")
+        await manager.adoptActiveMountForTesting(ConnectionManager.ActiveMount(
+            connection: connection, serverID: "s1", mountPoint: dir.appendingPathComponent("Cloud")))
+
+        let outcome = await manager.storageUsage(for: connection)
+
+        guard case .unreachable = outcome else { return XCTFail("expected unreachable, got \(outcome)") }
+    }
+
+    /// A real daemon with a throwaway config holding one WebDAV remote on an
+    /// `.invalid` host, so `about` fails at once and the usage-document path runs.
+    private func withGateDaemon(_ body: (ConnectionManager, Connection) async throws -> Void) async throws {
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("App/grrclone/Resources/rclone"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/rclone"),
+        ]
+        guard let rclone = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            throw XCTSkip("no rclone binary found")
+        }
+        let dir = URL(fileURLWithPath: "/tmp").appendingPathComponent("gru" + String(UInt32.random(in: 0..<0xFFFFFF), radix: 16))
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = dir.appendingPathComponent("rclone.conf")
+        try "".write(to: config, atomically: true, encoding: .utf8)
+        let previous = ProcessInfo.processInfo.environment["RCLONE_CONFIG"]
+        setenv("RCLONE_CONFIG", config.path, 1)
+        defer { if let previous { setenv("RCLONE_CONFIG", previous, 1) } else { unsetenv("RCLONE_CONFIG") } }
+
+        let supervisor = DaemonSupervisor(binary: rclone,
+                                          settings: DaemonSettings(cacheDirectory: dir.appendingPathComponent("c")),
+                                          runtimeDirectory: dir)
+        let client = try await supervisor.start()
+        do {
+            try await client.createRemote(name: "gate", type: "webdav",
+                                          parameters: ["url": "https://grr-test.invalid/", "vendor": "other"])
+            let manager = ConnectionManager(supervisor: supervisor,
+                                            registry: MountRegistry(fileURL: dir.appendingPathComponent("mounts.json")))
+            let connection = Connection(remote: "gate", displayName: "Gate")
+            await manager.adoptActiveMountForTesting(ConnectionManager.ActiveMount(
+                connection: connection, serverID: "s1", mountPoint: dir.appendingPathComponent("Gate")))
+            try await body(manager, connection)
+        } catch {
+            await supervisor.stop()
+            throw error
+        }
+        await supervisor.stop()
+    }
+
+    private static let validDocument =
+        #"{"version": 1, "categories": [{"id": "files", "label": "Files", "used_bytes": 1, "hard_limit_bytes": 10}]}"#
+
+    private static func ok(_ request: URLRequest) -> (Data, URLResponse) {
+        (Data(validDocument.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                                   headerFields: ["Content-Type": "application/json"])!)
+    }
+
+    /// A disconnect that lands while the usage document is being fetched: the
+    /// figures are not reported for a volume that is no longer there (Codex, on
+    /// review). The fetcher disconnects mid-request and then returns good figures.
+    func testADisconnectDuringTheFetchIsNotReportedAsUsage() async throws {
+        try await withGateDaemon { manager, connection in
+            let fetcher = StorageUsage.Fetcher { request in
+                await manager.forgetActiveMountForTesting(connection.id)   // the user clicks Disconnect
+                return Self.ok(request)
+            }
+            let outcome = await manager.storageUsage(for: connection, fetcher: fetcher)
+            XCTAssertEqual(outcome, .notConnected, "figures were reported for a volume disconnected mid-fetch")
+        }
+    }
+
+    /// When the caller says stop — the request superseded, the remote edited — the
+    /// request contacts nothing more. Here it stops just before the document fetch.
+    func testAStoppedRequestDoesNotFetch() async throws {
+        try await withGateDaemon { manager, connection in
+            final class Counter: @unchecked Sendable {
+                private let lock = NSLock(); private var n = 0
+                func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+            }
+            let asks = Counter(), fetches = Counter()
+            let fetcher = StorageUsage.Fetcher { request in _ = fetches.next(); return Self.ok(request) }
+            // Yes after the client, yes after `about`, then no.
+            let outcome = await manager.storageUsage(for: connection, fetcher: fetcher,
+                                                     proceed: { asks.next() < 3 })
+            XCTAssertEqual(outcome, .notConnected)
+            XCTAssertEqual(fetches.next(), 1, "the document was fetched after the caller said stop")
+        }
+    }
+
+    /// Mid-disconnect — unmounted, server not yet stopped, still in `active` — is not
+    /// connected for this purpose. A transport whose unmount waits lets the test ask
+    /// in exactly that window.
+    func testAVolumeBeingDisconnectedIsNotAsked() async throws {
+        actor Gate { var open = false; func release() { open = true }; func wait() async {
+            while !open { try? await Task.sleep(nanoseconds: 10_000_000) } } }
+        struct SlowUnmount: MountTransport {
+            let kind: TransportKind = .nfs
+            let gate: Gate
+            func serveParameters(for connection: Connection, cacheRoot: URL) -> [String: JSONValue] { [:] }
+            func mount(connection: Connection, server: RcloneRCClient.Server, at mountPoint: URL) async throws {}
+            func unmount(at mountPoint: URL) async throws { await gate.wait() }
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("grr147-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let gate = Gate()
+        let manager = ConnectionManager(
+            supervisor: DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"), runtimeDirectory: dir),
+            registry: MountRegistry(fileURL: dir.appendingPathComponent("mounts.json")),
+            transports: [SlowUnmount(gate: gate)])
+        let connection = Connection(remote: "dav1", displayName: "Cloud")
+        await manager.adoptActiveMountForTesting(ConnectionManager.ActiveMount(
+            connection: connection, serverID: "s1", mountPoint: dir.appendingPathComponent("Cloud")))
+
+        let disconnecting = Task { try? await manager.disconnect(connection.id) }
+        try await Task.sleep(nanoseconds: 100_000_000)   // inside the unmount now
+        let stillListed = await manager.activeMounts.contains { $0.connection.id == connection.id }
+        XCTAssertTrue(stillListed, "the window this test needs: listed as active mid-disconnect")
+
+        let outcome = await manager.storageUsage(for: connection)
+        await gate.release()
+        _ = await disconnecting.value
+
+        XCTAssertEqual(outcome, .notConnected, "a volume being disconnected must not be asked")
+    }
 }

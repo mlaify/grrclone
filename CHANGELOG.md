@@ -26,11 +26,20 @@ thing was built the way it was, and what was tried and rejected — lives in
 ### Fixed
 
 - When checking whether rclone from a previous run is still alive, grrclone no longer
+
   treats "could not read that process's details" as "that process is not rclone".
   The second reading cleared the record of a daemon that might still be running and
   left it unreachable. It now waits and asks again, and if it still cannot tell,
   starts nothing and says so.
   ([#149](https://github.com/mlaify/grrclone/issues/149))
+
+- grrclone no longer asks a remote about its storage usage unless that remote is
+  connected. Opening the menu used to ask every configured remote, which made
+  rclone log in to providers you had set up but never connected from this Mac.
+  Settings now says "Connect to see usage" for those, and the figure is fetched
+  as soon as the volume connects. After you edit a connected remote's settings,
+  usage waits for the remount rather than contacting the newly entered storage.
+  ([#147](https://github.com/mlaify/grrclone/issues/147))
 
 ## [0.9.4] - 2026-09-30
 

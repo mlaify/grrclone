@@ -229,6 +229,15 @@ private struct StorageUsageSection: View {
                         }
                     }
                 }
+            case .awaitingRemount?:
+                Text("Remount to see usage. The saved settings changed, and the volume is "
+                     + "still using the old ones.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .notConnected?:
+                Text("Connect to see usage. grrclone asks only storage that is connected.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             case .notReported?:
                 Text("This storage does not report usage.")
                     .font(.caption).foregroundStyle(.secondary)
