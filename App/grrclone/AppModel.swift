@@ -1263,6 +1263,10 @@ final class AppModel: ObservableObject {
                     self.setState(.mounted(at: mount.mountPoint), for: connection.id)
                     self.status = "Remounted \(connection.displayName)"
                 }
+                // The Remount button bypasses connect(_:) and disconnect(_:), so it
+                // records itself (Codex, on review).
+                await self.healthLog.record(.user, volume: connection.displayName,
+                                            mountPoint: mount.mountPoint.path, outcome: "remounted")
             } catch {
                 await MainActor.run {
                     self.setState(.failed(error.localizedDescription), for: connection.id)
