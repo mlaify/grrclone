@@ -872,6 +872,9 @@ final class AppModel: ObservableObject {
         }
 
         status = "Deleting \(connection.displayName)"
+        // Deleting a mounted remote unmounts it first, through the manager directly,
+        // so the history needs its own line here (Codex, on review).
+        let wasMountedAt = await manager.activeMountPoint(id: connection.id)?.path
         do {
             let outcome = try await manager.deleteRemote(connection,
                                                          configPath: configPath,
@@ -905,6 +908,10 @@ final class AppModel: ObservableObject {
             }
 
             cancelDeleting()
+            if let wasMountedAt {
+                await healthLog.record(.user, volume: connection.displayName, mountPoint: wasMountedAt,
+                                       outcome: "disconnected to delete the remote")
+            }
             await refresh()
             let alsoRemoved = siblings.isEmpty ? ""
                 : " Also removed \(siblings.map(\.displayName).joined(separator: ", ")), "
@@ -916,6 +923,14 @@ final class AppModel: ObservableObject {
         } catch {
             lastError = error.localizedDescription
             status = "Ready"
+            // The unmount can succeed and a later step — the cache scan, the config
+            // delete — fail. The volume is gone either way; say so.
+            if let wasMountedAt,
+               await !manager.activeMounts.contains(where: { $0.connection.id == connection.id }) {
+                await healthLog.record(.user, volume: connection.displayName, mountPoint: wasMountedAt,
+                                       outcome: "disconnected, then deleting the remote failed",
+                                       detail: error.localizedDescription)
+            }
             return false
         }
     }
