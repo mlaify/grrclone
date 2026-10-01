@@ -368,4 +368,15 @@ final class HealthToleranceTests: XCTestCase {
         XCTAssertLessThan(stamp, passEnded.addingTimeInterval(-2),
                           "the first decision was stamped at the end of the pass: \(first)")
     }
+
+    /// Read back newest last by time, whatever order the lines were written in.
+    func testRecentIsInTimeOrderNotWriteOrder() async throws {
+        let healthLog = log()
+        let now = Date()
+        await healthLog.record(.user, volume: "Later", mountPoint: "/m", outcome: "connected", at: now)
+        await healthLog.record(.timer, volume: "Earlier", mountPoint: "/m", outcome: "rebuilt",
+                               at: now.addingTimeInterval(-30))
+        let lines = await healthLog.recent()
+        XCTAssertEqual(lines.map { $0.contains("Earlier") }, [true, false], "\(lines)")
+    }
 }

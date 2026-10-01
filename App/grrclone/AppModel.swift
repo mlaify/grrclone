@@ -1253,11 +1253,9 @@ final class AppModel: ObservableObject {
             // For the health log: where it was, and whether teardown had happened by
             // the time anything failed (Codex: a Remount that tore down and then
             // failed to connect left no record of the volume disappearing).
-            let oldPoint: String = await MainActor.run {
-                guard let row = self.rows.first(where: { $0.id == connection.id }),
-                      case .mounted(let url) = row.state else { return "" }
-                return url.path
-            }
+            // From the manager, not the row: the row was set to `.connecting` above
+            // and no longer carries the URL (Codex, on review).
+            let oldPoint = await manager.activeMountPoint(id: connection.id)?.path ?? ""
             var tornDown = false
             do {
                 try await manager.disconnect(connection.id)
@@ -1282,7 +1280,10 @@ final class AppModel: ObservableObject {
                     self.setState(.failed(error.localizedDescription), for: connection.id)
                     self.lastError = error.localizedDescription
                 }
-                if tornDown {
+                // Teardown is judged by the manager's state, not by whether
+                // disconnect returned: it can unmount and then throw in cleanup.
+                let stillActive = await manager.activeMounts.contains { $0.connection.id == connection.id }
+                if tornDown || !stillActive {
                     await self.healthLog.record(.user, volume: connection.displayName, mountPoint: oldPoint,
                                                 outcome: "remount failed after unmounting",
                                                 detail: error.localizedDescription)

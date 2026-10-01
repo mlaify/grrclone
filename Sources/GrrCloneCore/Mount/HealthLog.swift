@@ -69,7 +69,15 @@ public actor HealthLog {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
             return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
         }
-        return Array(lines.suffix(limit))
+        // By timestamp, not append order. A health pass writes its decisions when it
+        // finishes, and a connect you made during it is written at once, so append
+        // order can put an earlier decision after a later click (Codex, on review).
+        // ISO 8601 in UTC sorts as text; the sort is stable for equal stamps.
+        let sorted = lines.enumerated().sorted { a, b in
+            let ka = a.element.prefix(while: { $0 != " " }), kb = b.element.prefix(while: { $0 != " " })
+            return ka == kb ? a.offset < b.offset : ka < kb
+        }.map(\.element)
+        return Array(sorted.suffix(limit))
     }
 
     private var rotatedURL: URL {
