@@ -7,7 +7,7 @@ Last updated: 2026-09-19.
 
 ## Where things stand
 
-**v0.9.4 is released**, and installable two ways:
+**v0.9.5 is released**, and installable two ways:
 
 ```bash
 brew install --cask mlaify/tap/grrclone
@@ -18,7 +18,7 @@ signed, notarised and stapled; Gatekeeper accepts them on a machine that has nev
 seen the app. The maintainer runs it daily, having retired a hand-rolled launchd
 `nfsmount` agent for it.
 
-384 tests. CI runs build, test and the privacy script on every pull request; CodeQL
+398 tests. CI runs build, test and the privacy script on every pull request; CodeQL
 runs on main and weekly, and covers the app target as well as the packages — which it
 did not before, and which was proved rather than assumed.
 
@@ -43,6 +43,27 @@ did not before, and which was proved rather than assumed.
 | v0.9.0 | **Released** 2026-09-21 |
 
 ## Releases
+
+### v0.9.5 — 2026-10-01
+
+The backlog after 0.9.4, cleared.
+
+- #147 — storage usage asks only remotes that are mounted (and not being torn down),
+  rechecked after every await; per-connection request generations, an `.awaitingRemount`
+  state while an edit is pending, and a per-remote edit counter that connects compare.
+- #149 — `DaemonPidFile.identify` fails closed when `ps` cannot read the arguments
+  (`(sh)` or empty). The test's fake orphan no longer holds the runner's output pipe, so
+  that class runs in 5 s instead of about 5 minutes.
+- #154 — `HealthLog`: a persistent, rotated, `0600` record of every rebuild, slow volume
+  left alone, failure, and user/login connect, disconnect, remount and delete, with the
+  trigger and each probe's timing. Shown under Health decisions on the Logs tab.
+- #155 — the README and limitations doc explain the 5-second "Server connections
+  interrupted" alert.
+
+Codex reviewed most of this in many rounds before Codex reviews were switched off;
+merges from then on were on CI plus my own review.
+
+398 tests.
 
 ### v0.9.4 — 2026-09-30
 
