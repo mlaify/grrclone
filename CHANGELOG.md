@@ -11,6 +11,15 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Fixed
+
+- When checking whether rclone from a previous run is still alive, grrclone no longer
+  treats "could not read that process's details" as "that process is not rclone".
+  The second reading cleared the record of a daemon that might still be running and
+  left it unreachable. It now waits and asks again, and if it still cannot tell,
+  starts nothing and says so.
+  ([#149](https://github.com/mlaify/grrclone/issues/149))
+
 ## [0.9.4] - 2026-09-30
 
 ### Security
