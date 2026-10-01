@@ -56,7 +56,7 @@ public actor HealthLog {
 
     public func record(_ trigger: Trigger, volume: String, mountPoint: String,
                        outcome: String, detail: String = "", at date: Date = Date()) {
-        let stamp = ISO8601DateFormatter().string(from: date)
+        let stamp = Self.stampFormatter().string(from: date)
         var line = "\(stamp)  \(trigger)  \(Self.clean(volume))  \(Self.clean(outcome))  \(Self.clean(mountPoint))"
         if !detail.isEmpty { line += "  — \(Self.clean(detail))" }
         append(line + "\n")
@@ -98,6 +98,16 @@ public actor HealthLog {
         defer { try? handle.close() }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: Data(text.utf8))
+    }
+
+    /// UTC with milliseconds, a fixed width, so text order is time order even
+    /// within one second (Codex, on review: whole seconds tied, and a tie fell back
+    /// to write order, which a pass's late flush reverses).
+    public static func stampFormatter() -> ISO8601DateFormatter {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
     }
 
     /// One line per event, whatever a name contains.
