@@ -11,6 +11,18 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Added
+
+- grrclone now keeps a record of why it rebuilt a volume, left a slow one alone,
+  or reported one as failed, and of each time you connected or disconnected one.
+  Each line says what triggered the check (the timer, waking from sleep, a network
+  change, rclone stopping, or Check mounts), what each probe found and how long it
+  took, and how many uploads were in flight. It is kept in
+  `~/Library/Logs/org.mlaify.grrclone/health.log`, survives quitting the app, and
+  the latest entries are under Health decisions on the Logs tab. Healthy checks
+  are not written.
+  ([#154](https://github.com/mlaify/grrclone/issues/154))
+
 ### Fixed
 
 - When checking whether rclone from a previous run is still alive, grrclone no longer
