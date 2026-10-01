@@ -364,7 +364,7 @@ final class HealthToleranceTests: XCTestCase {
         let lines = await healthLog.recent()
         XCTAssertEqual(lines.count, 2, "\(lines)")
         let first = try XCTUnwrap(lines.first)
-        let stamp = try XCTUnwrap(ISO8601DateFormatter().date(from: String(first.prefix(while: { $0 != " " }))), first)
+        let stamp = try XCTUnwrap(HealthLog.stampFormatter().date(from: String(first.prefix(while: { $0 != " " }))), first)
         XCTAssertLessThan(stamp, passEnded.addingTimeInterval(-2),
                           "the first decision was stamped at the end of the pass: \(first)")
     }
@@ -376,6 +376,17 @@ final class HealthToleranceTests: XCTestCase {
         await healthLog.record(.user, volume: "Later", mountPoint: "/m", outcome: "connected", at: now)
         await healthLog.record(.timer, volume: "Earlier", mountPoint: "/m", outcome: "rebuilt",
                                at: now.addingTimeInterval(-30))
+        let lines = await healthLog.recent()
+        XCTAssertEqual(lines.map { $0.contains("Earlier") }, [true, false], "\(lines)")
+    }
+
+    /// Within one second, still in time order.
+    func testOrderHoldsWithinASecond() async throws {
+        let healthLog = log()
+        let t = Date(timeIntervalSince1970: 1_790_000_000.700)
+        await healthLog.record(.user, volume: "Later", mountPoint: "/m", outcome: "connected", at: t)
+        await healthLog.record(.timer, volume: "Earlier", mountPoint: "/m", outcome: "rebuilt",
+                               at: t.addingTimeInterval(-0.5))
         let lines = await healthLog.recent()
         XCTAssertEqual(lines.map { $0.contains("Earlier") }, [true, false], "\(lines)")
     }
