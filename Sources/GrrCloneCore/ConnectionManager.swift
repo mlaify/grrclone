@@ -1065,7 +1065,10 @@ public actor ConnectionManager {
 
         // Written after the pass, in order, and awaited — not from a `defer`d Task,
         // which would race the next pass and a test reading the file.
-        var decisions: [(volume: String, mountPoint: String, outcome: String, detail: String)] = []
+        // Each keeps the moment it was decided: a pass with two 45-second confirmations
+        // would otherwise stamp them all at its end, after events that happened later
+        // (Codex, on review).
+        var decisions: [(volume: String, mountPoint: String, outcome: String, detail: String, at: Date)] = []
 
         for mount in active.values {
             let id = mount.connection.id
@@ -1093,7 +1096,7 @@ public actor ConnectionManager {
                     let why = report.failed[id] ?? report.slow[id] ?? ""
                     let detail = (steps + (why.isEmpty ? [] : [why])).joined(separator: "; ")
                     _ = log
-                    decisions.append((mount.connection.displayName, mount.mountPoint.path, outcome, detail))
+                    decisions.append((mount.connection.displayName, mount.mountPoint.path, outcome, detail, Date()))
                 }
             }
             switch await timedProbe(Self.probeDeadline) {
@@ -1144,7 +1147,7 @@ public actor ConnectionManager {
         if let healthLog {
             for d in decisions {
                 await healthLog.record(trigger, volume: d.volume, mountPoint: d.mountPoint,
-                                       outcome: d.outcome, detail: d.detail)
+                                       outcome: d.outcome, detail: d.detail, at: d.at)
             }
         }
         return report
