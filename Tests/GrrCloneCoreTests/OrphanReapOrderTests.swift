@@ -90,17 +90,53 @@ final class OrphanReapOrderTests: XCTestCase {
     /// test a code path the real thing never takes.
     private func spawnFakeOrphan(socketPath: String) throws -> Int32 {
         let fake = dir.appendingPathComponent("rclone")
-        try "#!/bin/sh\nsleep 300\n".write(to: fake, atomically: true, encoding: .utf8)
+        // Not `sleep 300`: tearDown SIGKILLs the shell, and its `sleep` child then
+        // lived on for five minutes holding the test runner's output pipe, so
+        // `swift test` waited for it after every run. One-second steps end within a
+        // second of the shell dying. And not `exec sleep`, which would replace the
+        // command line this fake exists to present.
+        try "#!/bin/sh\nwhile :; do sleep 1; done\n".write(to: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755],
                                               ofItemAtPath: fake.path)
 
         let process = Process()
         process.executableURL = fake
         process.arguments = ["rcd", "--rc-addr", "unix://\(socketPath)"]
+        // Its own output nowhere: a child holding the runner's pipes keeps
+        // `swift test` waiting after the tests have finished.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         try process.run()
         spawned.append(process.processIdentifier)
         spawnedProcesses[process.processIdentifier] = process
+        try waitUntilIdentifiable(process.processIdentifier, socketPath: socketPath)
         return process.processIdentifier
+    }
+
+    /// Do not hand back a fake until `ps` can see its full command line. A test
+    /// that starts the supervisor in the moment before then is testing the race,
+    /// not the code (#149).
+    private func waitUntilIdentifiable(_ pid: Int32, socketPath: String) throws {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/ps")
+            p.arguments = ["-ww", "-p", String(pid), "-o", "command="]
+            let out = Pipe()
+            p.standardOutput = out
+            try p.run()
+            let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            p.waitUntilExit()
+            if DaemonPidFile.classify(command: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                      socketPath: socketPath) == .ours { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTFail("the fake orphan never became identifiable by ps")
+    }
+
+    /// For a failure message: what identification saw, without changing anything.
+    private func identityNow(_ pid: Int32, _ socketPath: String) async -> String {
+        "\(await DaemonPidFile.identify(pid: pid, socketPath: socketPath)); alive=\(kill(pid, 0) == 0)"
     }
 
     // MARK: - The window exists
@@ -218,7 +254,8 @@ final class OrphanReapOrderTests: XCTestCase {
 
         do {
             _ = try await supervisor.start()
-            XCTFail("start() should refuse while an owned mount is still live")
+            XCTFail("start() should refuse while an owned mount is still live; "
+                    + "identify now says \(await identityNow(orphanPID, socket))")
         } catch let error as DaemonSupervisor.Failure {
             guard case .orphanMountsStillLive(let paths) = error else {
                 return XCTFail("expected orphanMountsStillLive, got \(error)")
@@ -358,5 +395,19 @@ final class OrphanReapOrderTests: XCTestCase {
             throw XCTSkip("no rclone binary found; run scripts/fetch-rclone.sh to exercise these")
         }
         return found
+    }
+
+    // MARK: - ps output that says nothing (#149)
+
+    /// Arguments unavailable is no answer, never "not ours".
+    func testUnreadableArgumentsAreUnknownNotSomeoneElses() {
+        XCTAssertNil(DaemonPidFile.classify(command: "(sh)", socketPath: "/tmp/x/rc.sock"))
+        XCTAssertNil(DaemonPidFile.classify(command: "", socketPath: "/tmp/x/rc.sock"))
+        XCTAssertEqual(DaemonPidFile.classify(command: "/usr/bin/rclone rcd --rc-addr unix:///tmp/x/rc.sock",
+                                              socketPath: "/tmp/x/rc.sock"), .ours)
+        XCTAssertEqual(DaemonPidFile.classify(command: "/usr/sbin/sshd -D", socketPath: "/tmp/x/rc.sock"), .notOurs)
+        // A real command that happens to be wrapped in parentheses only at one end
+        // is still read normally.
+        XCTAssertEqual(DaemonPidFile.classify(command: "(not ours", socketPath: "/tmp/x/rc.sock"), .notOurs)
     }
 }

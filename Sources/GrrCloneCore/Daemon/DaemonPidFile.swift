@@ -172,9 +172,30 @@ public struct DaemonPidFile: Sendable {
             // A non-zero exit from `ps -p` means no such process, which is an answer.
             guard result.succeeded else { return .notOurs }
             let command = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            return command.contains("rclone") && command.contains(socketPath)
-                ? .ours : .notOurs
+            switch classify(command: command, socketPath: socketPath) {
+            case .some(let identity): return identity
+            case .none:
+                // `ps` could not read the arguments. That is not "someone else's
+                // process" — it is no answer, so ask again, then say so (#149).
+                if attempt == 0 { try? await Task.sleep(nanoseconds: 200_000_000) }
+                continue
+            }
         }
         return .unknown
+    }
+
+    /// What one line of `ps -o command=` says, or nil when it says nothing.
+    ///
+    /// When `ps` cannot read a process's arguments — a process mid-exec, a zombie, a
+    /// transient sysctl failure — it prints the bare name in parentheses, `(sh)`, or
+    /// nothing. Reading that as `.notOurs` failed open: the record was cleared and
+    /// the socket deleted under a daemon that might still be ours, which is the one
+    /// outcome this type exists to prevent. Suspected in #149's CI failure, where a
+    /// live fake orphan was not identified; not reproduced locally in 300 tries
+    /// under load, so this closes the hole rather than claiming the cause.
+    static func classify(command: String, socketPath: String) -> Identity? {
+        if command.isEmpty { return nil }
+        if command.hasPrefix("("), command.hasSuffix(")") { return nil }
+        return command.contains("rclone") && command.contains(socketPath) ? .ours : .notOurs
     }
 }
