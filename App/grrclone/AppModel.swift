@@ -463,9 +463,11 @@ final class AppModel: ObservableObject {
 
     /// Pull the latest daemon output into the published list.
     func refreshLogs() async {
+        // The health history is on disk and needs no daemon. Loaded first, so it is
+        // there precisely when rclone could not be started (Codex, on review).
+        healthEvents = await healthLog.recent(limit: 30)
         guard let supervisor else { return }
         logLines = await supervisor.log.recent
-        healthEvents = await healthLog.recent(limit: 30)
     }
 
     /// Change verbosity on the running daemon.
