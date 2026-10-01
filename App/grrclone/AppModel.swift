@@ -1487,7 +1487,7 @@ final class AppModel: ObservableObject {
 
         status = "Disconnecting \(mount.path)"
         let root = mountRoot.path
-        Task.detached { [manager] in
+        Task.detached { [manager, healthLog] in
             guard let manager else { return }
             do {
                 let removed = try await manager.reclaimForeignMount(at: mount.path, under: [root])
@@ -1495,8 +1495,14 @@ final class AppModel: ObservableObject {
                     self.status = removed == 1 ? "Disconnected \(mount.path)"
                                                : "Disconnected \(removed) volumes at \(mount.path)"
                 }
+                await healthLog.record(.user, volume: "(not managed)", mountPoint: mount.path,
+                                       outcome: "disconnected", detail: "\(removed) layer(s) removed")
             } catch {
                 await MainActor.run { self.lastError = error.localizedDescription }
+                // Reclaim removes one layer per call and throws if any remain, so a
+                // throw can follow real teardown; record what was attempted.
+                await healthLog.record(.user, volume: "(not managed)", mountPoint: mount.path,
+                                       outcome: "disconnect attempted", detail: error.localizedDescription)
             }
             await self.refresh()
         }
