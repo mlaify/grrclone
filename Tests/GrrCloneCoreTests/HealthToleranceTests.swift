@@ -338,4 +338,34 @@ final class HealthToleranceTests: XCTestCase {
         let lines = await healthLog.recent()
         XCTAssertEqual(lines.count, 1, "\(lines)")
     }
+
+    /// A decision is stamped when it was made, not when the pass finished. Two
+    /// volumes whose probes each take a second and a half: the first decision is
+    /// about three seconds before the pass ends, and its line must say so.
+    func testADecisionKeepsItsOwnTime() async throws {
+        let healthLog = log()
+        let registry = MountRegistry(fileURL: dir.appendingPathComponent("mounts.json"))
+        let manager = ConnectionManager(
+            supervisor: DaemonSupervisor(binary: URL(fileURLWithPath: "/usr/bin/false"), runtimeDirectory: dir),
+            registry: registry, transports: [RecordingTransport()],
+            probe: { _, _ in try? await Task.sleep(nanoseconds: 1_500_000_000); return .unresponsive },
+            uploadsInFlight: { _ in 0 }, healthLog: healthLog)
+        for name in ["One", "Two"] {
+            let c = Connection(remote: name.lowercased(), displayName: name)
+            let point = dir.appendingPathComponent(name)
+            try await registry.record(MountRegistry.Entry(connectionID: c.id, mountPoint: point.path,
+                                                          transport: "nfs", serverID: name, port: 2049, pid: 1))
+            await manager.adoptActiveMountForTesting(.init(connection: c, serverID: name, mountPoint: point))
+        }
+
+        _ = await manager.checkHealth(trigger: .timer)
+        let passEnded = Date()
+
+        let lines = await healthLog.recent()
+        XCTAssertEqual(lines.count, 2, "\(lines)")
+        let first = try XCTUnwrap(lines.first)
+        let stamp = try XCTUnwrap(ISO8601DateFormatter().date(from: String(first.prefix(while: { $0 != " " }))), first)
+        XCTAssertLessThan(stamp, passEnded.addingTimeInterval(-2),
+                          "the first decision was stamped at the end of the pass: \(first)")
+    }
 }
