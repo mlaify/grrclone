@@ -115,11 +115,32 @@ spctl -a -vvv -t open --context context:primary-signature ~/Downloads/grrclone.d
 `source=Notarized Developer ID` is the answer you want. Anything else means a user
 sees a warning.
 
-## The certificate expires 2027-02-01
+## The certificate is a G2 one, and expires 2031-09-17
 
-Sooner than the usual five years, most likely capped by the membership renewal date.
-Builds signed after it expires will not be trusted, so renew before then and update
-`MACOS_CERTIFICATE_P12` and `MACOS_SIGN_IDENTITY_SHA1`.
+Apple's original Developer ID intermediate (Sub-CA) expires 2027-02-01, and every
+certificate it issued stops working that day. The first certificate this project used
+came from it, which is why it expired so soon, not the membership renewal date as first
+guessed. Signing moved to a certificate from the **G2** intermediate on 2026-10-02.
+
+Xcode cannot issue a G2 certificate: Settings → Accounts → Manage Certificates offers no
+choice of intermediate and still issues from the old one. Use the portal instead, and pick
+**Profile Type: G2 Sub-CA** when it asks (`scripts/install-developer-id.sh` covers the rest).
+Check the result before relying on it:
+
+```bash
+openssl x509 -in ~/.config/grrclone-signing/developer-id.pem -noout -issuer -enddate
+```
+
+The issuer must include `OU=G2`.
+
+Releases already shipped are unaffected: they carry a secure timestamp and a notarisation
+ticket, so Gatekeeper keeps trusting them after the old intermediate expires. Do not revoke
+the old certificates to tidy up; revoking invalidates everything ever signed with them.
+Let them expire.
+
+When this one is replaced, update `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`
+and `MACOS_SIGN_IDENTITY_SHA1` together. The workflow refuses to sign when the certificate
+and the pinned hash disagree.
 
 ## Homebrew, and why the app does not update itself
 
