@@ -740,9 +740,14 @@ Do not re-litigate these without new evidence. Reasoning is in
   `codesign` is no longer ambiguous there. The certificate remains valid on the account
   and simply goes unused. Any new machine will see it again if that keychain is
   restored from a backup, which is another reason the pin stays.
-- **The Developer ID certificate expires 2027-02-01**, much sooner than the usual five
-  years, which normally means it is capped by the membership renewal date. Worth
-  confirming before relying on it for a release cycle.
+
+  **Update 2026-10-02**: the pin now names the G2 certificate (see below). Every older
+  Developer ID certificate on the account expires 2027-02-01, after which the ambiguity
+  goes away on its own.
+- **Signing moved to a G2 Developer ID certificate on 2026-10-02**, valid to 2031-09-17.
+  The original certificate's 2027-02-01 expiry was the old Apple intermediate's, not the
+  membership's. Xcode only issues from the old intermediate, so the G2 certificate came
+  from the portal. Shipped releases stay trusted. Details in `docs/releasing.md`.
 
 - **Quit safety is only as good as what it can observe.** Three defects here all had
   the same shape and were fixed together: a check that cannot see a problem must say

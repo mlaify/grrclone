@@ -10,9 +10,12 @@
 #   1. Open https://developer.apple.com/account/resources/certificates/add
 #   2. Choose "Developer ID Application"  (NOT "Apple Development" — that one cannot
 #      sign software for distribution outside the App Store)
-#   3. Upload  ~/.config/grrclone-signing/developer-id.csr
-#   4. Download the resulting .cer file
-#   5. Run:  scripts/install-developer-id.sh ~/Downloads/developerID_application.cer
+#   3. Set Profile Type to "G2 Sub-CA". The other option issues from Apple's original
+#      intermediate, which expires 2027-02-01 and takes its certificates with it.
+#      Xcode cannot do this step: it always issues from the old intermediate.
+#   4. Upload  ~/.config/grrclone-signing/developer-id.csr
+#   5. Download the resulting .cer file
+#   6. Run:  scripts/install-developer-id.sh ~/Downloads/developerID_application.cer
 #
 # Only the Account Holder can create a Developer ID certificate, and an account may hold
 # only a limited number, so do not create spares. If you already have one, reuse it
