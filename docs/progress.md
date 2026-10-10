@@ -44,6 +44,21 @@ did not before, and which was proved rather than assumed.
 
 ## Releases
 
+### Unreleased
+
+`DaemonPidFile.identify` no longer runs `/bin/ps`. `ps` is setuid root, and a sandboxed
+process may not run a setuid program at all: under `sandbox-exec` (a build sandbox for an
+AI agent, in this case) every launch failed with EPERM, so identification always came out
+`.unknown` and nine orphan and daemon tests failed. The arguments now come from
+`sysctl(KERN_PROCARGS2)` (`ProcessArguments`), which gives a process's own user what
+`ps -o command=` prints, with no helper process, pipe or timeout.
+
+The three-way answer from v0.6.1 is unchanged. The kernel answers EINVAL alike for a
+process that is gone, another user's, a zombie or one mid-exec, so a failed read is "no
+answer", retried once, and only `kill(pid, 0)` failing with ESRCH turns it into "not
+ours". The two tests that used `ps` to wait for a fake orphan and to read the daemon's
+arguments use the same reader.
+
 ### v0.9.5 — 2026-10-01
 
 The backlog after 0.9.4, cleared.

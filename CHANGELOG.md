@@ -11,6 +11,12 @@ thing was built the way it was, and what was tried and rejected — lives in
 
 ## [Unreleased]
 
+### Changed
+
+- Recognising an rclone daemon left behind by a crash no longer runs `ps`. grrclone
+  reads the daemon's command line straight from macOS, so the check can't time out
+  under load and works the same inside a sandbox.
+
 ## [0.9.5] - 2026-10-01
 
 ### Added

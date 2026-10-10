@@ -113,25 +113,17 @@ final class OrphanReapOrderTests: XCTestCase {
         return process.processIdentifier
     }
 
-    /// Do not hand back a fake until `ps` can see its full command line. A test
+    /// Do not hand back a fake until its full command line is readable. A test
     /// that starts the supervisor in the moment before then is testing the race,
     /// not the code (#149).
     private func waitUntilIdentifiable(_ pid: Int32, socketPath: String) throws {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/ps")
-            p.arguments = ["-ww", "-p", String(pid), "-o", "command="]
-            let out = Pipe()
-            p.standardOutput = out
-            try p.run()
-            let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            p.waitUntilExit()
-            if DaemonPidFile.classify(command: text.trimmingCharacters(in: .whitespacesAndNewlines),
-                                      socketPath: socketPath) == .ours { return }
+            if let command = ProcessArguments.commandLine(pid: pid),
+               DaemonPidFile.classify(command: command, socketPath: socketPath) == .ours { return }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        XCTFail("the fake orphan never became identifiable by ps")
+        XCTFail("the fake orphan's command line never became readable")
     }
 
     /// For a failure message: what identification saw, without changing anything.

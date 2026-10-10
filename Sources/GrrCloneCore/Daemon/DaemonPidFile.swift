@@ -143,7 +143,7 @@ public struct DaemonPidFile: Sendable {
         case ours
         /// Definitely not ours: gone, or the PID belongs to something else.
         case notOurs
-        /// Could not be determined — `ps` did not answer.
+        /// Could not be determined — the kernel would not give its arguments.
         case unknown
     }
 
@@ -158,33 +158,28 @@ public struct DaemonPidFile: Sendable {
     ///
     /// Found via a test that failed about two runs in five, taking 10.6 seconds — 5s
     /// for the `ps` timeout plus 5s for the assertion's own wait.
+    ///
+    /// The arguments now come from the kernel (`ProcessArguments`), not `/bin/ps`: it is
+    /// setuid, and from inside a sandbox it could not be run at all, so every answer was
+    /// `.unknown`. The three-way distinction is unchanged.
     static func identify(pid: Int32, socketPath: String) async -> Identity {
         guard kill(pid, 0) == 0 else { return .notOurs }
 
-        // Retried once, because the observed failure was a transient timeout under
-        // load rather than a persistent inability to run `ps`.
+        // Retried once: a process caught mid-exec has no readable arguments for a moment.
         for attempt in 0..<2 {
-            guard let result = try? await Shell.run(
-                "/bin/ps", ["-p", String(pid), "-o", "command="], timeout: 10) else {
-                if attempt == 0 { try? await Task.sleep(nanoseconds: 200_000_000) }
-                continue
+            if let command = ProcessArguments.commandLine(pid: pid),
+               let identity = classify(command: command, socketPath: socketPath) {
+                return identity
             }
-            // A non-zero exit from `ps -p` means no such process, which is an answer.
-            guard result.succeeded else { return .notOurs }
-            let command = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            switch classify(command: command, socketPath: socketPath) {
-            case .some(let identity): return identity
-            case .none:
-                // `ps` could not read the arguments. That is not "someone else's
-                // process" — it is no answer, so ask again, then say so (#149).
-                if attempt == 0 { try? await Task.sleep(nanoseconds: 200_000_000) }
-                continue
-            }
+            // No arguments is not "someone else's process" — it is no answer (#149).
+            // Unless the process has gone in the meantime, which is an answer.
+            if kill(pid, 0) != 0, errno == ESRCH { return .notOurs }
+            if attempt == 0 { try? await Task.sleep(nanoseconds: 200_000_000) }
         }
         return .unknown
     }
 
-    /// What one line of `ps -o command=` says, or nil when it says nothing.
+    /// What a command line (`ps -o command=` format) says, or nil when it says nothing.
     ///
     /// When `ps` cannot read a process's arguments — a process mid-exec, a zombie, a
     /// transient sysctl failure — it prints the bare name in parentheses, `(sh)`, or
