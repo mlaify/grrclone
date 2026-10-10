@@ -100,8 +100,7 @@ final class DaemonExitTests: XCTestCase {
     // MARK: - No secret on the command line (#156)
 
     private func commandLine(of pid: Int32) async throws -> String {
-        let out = try await Shell.run("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)], timeout: 10)
-        return out.stdout
+        ProcessArguments.commandLine(pid: pid) ?? ""
     }
 
     /// Every local account can read a process's arguments on macOS. The daemon's
