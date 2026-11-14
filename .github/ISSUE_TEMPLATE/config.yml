@@ -2,4 +2,4 @@ blank_issues_enabled: false
 contact_links:
   - name: Report a vulnerability privately
     url: https://github.com/mlaify/grrclone/security/advisories/new
-    about: Use this only for a confidential vulnerability in the project itself, not for ordinary bugs or scanner output.
+    about: Use this only for a confidential vulnerability in the project itself, not for ordinary bugs or support questions.

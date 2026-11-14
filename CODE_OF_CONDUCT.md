@@ -59,8 +59,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement through GitHub by
-opening a private report on this repository. All complaints will be reviewed and
+reported to the community leaders responsible for enforcement through GitHub: open the **...** menu on the comment, issue, or pull
+request, select **Report content**, and choose **Report to repository admins**. If the
+concern involves a maintainer, use GitHub's [Report abuse](https://github.com/contact/report-abuse) form. All complaints will be reviewed and
 investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
