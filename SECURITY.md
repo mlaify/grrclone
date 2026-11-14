@@ -1,76 +1,56 @@
-# Security Policy
+# Security reporting
 
-## Reporting a vulnerability
+This repository follows the
+[mlaify organization-wide security reporting policy](https://github.com/mlaify/.github/blob/main/SECURITY.md).
+That policy defines the reporting channel, maintainer limits, unsupported environments, and the
+absence of payment, rewards, swag, response commitments, or remediation commitments.
 
-Please report security issues privately, not as a public issue.
+Use this repository's **Security** tab and select **Report a vulnerability** for a credible,
+confidential vulnerability in grrclone. Use a public issue for ordinary bugs, rclone-provider
+compatibility problems, installation failures, feature requests, and documentation corrections.
 
-Use GitHub's [private vulnerability reporting](https://github.com/mlaify/grrclone/security/advisories/new)
-on this repository.
-
-Use a public issue for ordinary bugs, rclone-provider compatibility problems, installation
-failures, feature requests, and documentation corrections. Automated scanner output without
-validation and a demonstrated grrclone impact is not sufficient by itself.
-
-This is a coordinated vulnerability disclosure program, not a bug bounty. We do not offer or
-promise payment, rewards, or swag for reports.
-
-Please include what an attacker can do, how to reproduce it, and your macOS and rclone
-versions. You will get an acknowledgement within a week. This is a small project without
-a dedicated security team, so please be patient, and let us agree on disclosure timing
-together rather than assuming a fixed window.
+Include what an attacker can do, safe reproduction steps, and the affected macOS, grrclone, and
+rclone versions.
 
 ## Scope
 
-grrclone runs entirely on the user's own machine. It has no server, no account system,
-and no backend. The realistic attack surface is local.
+grrclone is a macOS application that runs entirely on the user's own machine. It has no server,
+account system, or backend. The realistic attack surface is local.
 
 **In scope:**
 
-- Anything that lets another local user or process reach the rclone control socket, or
-  read the credentials used to authenticate to it.
-- Anything that exposes a user's storage to the network. grrclone's NFS and WebDAV
-  servers must bind to loopback only. **rclone's NFS server implements no
-  authentication at all**, so a non-loopback bind would publish the user's entire
-  storage account to the local network. Report any path that causes one.
-- Anything that causes grrclone to unmount, delete, or overwrite data it does not own.
-  Ownership is meant to come only from grrclone's own records.
-- Credential leakage into logs, crash reports, process arguments, or files readable by
-  other users.
-- Privilege escalation. grrclone is designed to need no root and installs no privileged
-  helper. Any path that gains privilege is a vulnerability.
-- Unexpected outbound network connections. grrclone should only ever contact the storage
-  providers a user configured.
+- A path that lets another local user or process reach the rclone control socket or read its
+  authentication credentials.
+- A path that exposes a user's storage to the network. grrclone's NFS and WebDAV servers must
+  bind to loopback only. rclone's NFS server has no authentication, so a non-loopback bind would
+  publish the user's storage account to the local network.
+- Unmounting, deleting, or overwriting data grrclone does not own.
+- Credential leakage into logs, crash reports, process arguments, or files readable by other
+  users.
+- Privilege escalation. grrclone is designed to need no root and installs no privileged helper.
+- Unexpected outbound network connections. grrclone should contact only storage providers the
+  user configured.
 
 **Out of scope:**
 
 - Vulnerabilities in rclone itself. Report those to
-  [rclone](https://github.com/rclone/rclone/security/policy). If rclone's behaviour
-  makes grrclone unsafe as configured, that is in scope here.
-- Vulnerabilities in the storage backends you connect to.
-- An attacker who already has your user account, your unlocked Mac, or root. grrclone
-  cannot defend against that, and does not claim to.
-- Denial of service against your own machine by configuring grrclone badly.
+  [rclone](https://github.com/rclone/rclone/security/policy). A distinct vulnerability caused by
+  grrclone's configuration of rclone remains in scope here.
+- Vulnerabilities in configured storage backends.
+- An attacker who already controls the user's account, unlocked Mac, or root.
+- Denial of service against the user's own machine through an unsafe local configuration.
 
 ## Design notes relevant to security
 
-These are deliberate and may save you time:
-
-- The rclone control API is bound to a **unix socket** with `0600` permissions inside a
-  `0700` directory, never to a TCP port, and credentials are random per launch. Nothing
-  is reachable over the network, not even loopback.
-- `--rc-web-gui` is never passed. It downloads a bundle from GitHub at runtime.
-- grrclone runs **unsandboxed** by necessity: it must spawn rclone and invoke
-  `/sbin/mount`. It is distributed with Developer ID signing and the hardened runtime
-  rather than through the App Store.
-- The app **reads** `rclone.conf` but does not write it, so credentials stay under
-  rclone's own management.
-- No telemetry, no analytics, no crash reporting, and no update check unless a user
-  turns one on.
+- The rclone control API is bound to a Unix socket with `0600` permissions inside a `0700`
+  directory. Credentials are random per launch.
+- `--rc-web-gui` is never passed because it downloads a bundle from GitHub at runtime.
+- grrclone runs unsandboxed because it must spawn rclone and invoke `/sbin/mount`.
+- The app reads `rclone.conf` but does not write it.
+- There is no telemetry, analytics, crash reporting, or update check unless a user enables one.
 
 ## Supported versions
 
-grrclone is pre-1.0. Only the latest release receives fixes.
+grrclone is pre-1.0. Only the latest release is considered for fixes.
 
-grrclone requires **rclone 1.74.4 or later**. Earlier versions have NFS defects that
-cause stale file handles, failed file creation, and broken listings of large
-directories. Running an older rclone is unsupported.
+grrclone requires rclone 1.74.4 or later. Earlier versions are unsupported.
