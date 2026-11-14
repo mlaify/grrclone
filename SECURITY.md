@@ -5,8 +5,14 @@
 Please report security issues privately, not as a public issue.
 
 Use GitHub's [private vulnerability reporting](https://github.com/mlaify/grrclone/security/advisories/new)
-on this repository. If that is unavailable to you, open an issue saying only that you
-have a security report and would like a private channel, with no details.
+on this repository.
+
+Use a public issue for ordinary bugs, rclone-provider compatibility problems, installation
+failures, feature requests, and documentation corrections. Automated scanner output without
+validation and a demonstrated grrclone impact is not sufficient by itself.
+
+This is a coordinated vulnerability disclosure program, not a bug bounty. We do not offer or
+promise payment, rewards, or swag for reports.
 
 Please include what an attacker can do, how to reproduce it, and your macOS and rclone
 versions. You will get an acknowledgement within a week. This is a small project without
